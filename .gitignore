@@ -1,0 +1,14 @@
+# organizer kit and data stay local
+kit/
+_download/
+runs/*
+!runs/05-eps/
+runs/05-eps/*
+!runs/05-eps/entry/
+__pycache__/
+*.pyc
+.venv/
+.env
+.DS_Store
+C?AUDE.md
+.c?aude/
