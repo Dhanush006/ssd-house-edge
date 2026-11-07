@@ -68,3 +68,30 @@ Validation technical points (max 60) and per-condition loss ratios vs frozen ref
 - PROMOTED: `runs/06-lowjump/` = lower jump/diffusion rates (filters were adapting too eagerly). Fresh-folder run from zip: 53.6 s, byte-identical; checker VALID; zip clean. Shipped model.py with 05 params reproduces 05 test CSV byte-for-byte.
 - Not promoted: short-history shrinkage, learned residual correction, fast/slow blend (see rows above).
 - CURRENT BEST (Phase B): `runs/06-lowjump/` (58.206). Fallback: `runs/05-eps/` (58.159).
+
+## Round-2 prep (17:06-) — structure-agnostic models + one-command runner
+Goal: be ready for the adaptation kit (changed temporal patterns). All numbers = main-kit validation points /60 (true probs).
+- **A** = `runs/06-lowjump` (hard-coded pairs (1,3),(2,5),(4,7), size lag tied, fixed tables): **58.206** | stable .0157 short .0599 drift .0236 shared .0241.
+- **B** `src/model_b.py` + `src/fit_b.py` (fit 3 s): hypotheses = 28 XOR pairs + 8 single lags + none; size lag k in 0..8 (0 = constant state).
+  Fit from kit data only: 2 size tables/type by 2-means on validation targets' p_i/(1-p0); joint prior pi(h,k) by EM over 1536 train+val
+  machines (windowed beta-binomial win evidence + size log-lik); mu/delta/bmag by sign-mixture regression on validation targets.
+  Runtime: per query, top-K=4 hypotheses (prior >= .004, windowed BB screen) run the (b,d) grid filter; evidence on common tick set.
+  - On main kit EM recovers exactly (1,3),(2,5),(4,7) (prior .33 each, rest <.001) and the tie k|pair = first lag (0.98-1.00); tables exact (max dev 0).
+  - fitted mu {st .25, ba -1.03, ja -2.45} delta .77 bmag 2.42 (A: .33/-.94/-2.5, .9, 2.4).
+  - signal term gam from the regression (+0.38) HURT: 57.774 -> gam=0: **58.182** | .0167 .0621 .0228 .0233 (gap to A -0.024). gam now forced 0.
+  - plugging A's mu/delta/bmag into B: 58.13-58.15 (fitted constants are slightly better); own-tick evidence (evcommon=false) 58.185 (same).
+  - **told nothing** (`--naive`: uniform prior over all 37 h, uniform k, no tie): **56.621** | .0297 .1238 .0435 .0417 — degrades mainly on short history.
+  - single core py3.13, 1536 test queries: 24-27 s fitted, 40 s naive.
+  - **Bt** = B with filter rates retuned by 8-draw random search on train dev split (kept only if confirm also better): qb .0089 jump .00053 qd .00217 etau .383; dev -0.24, confirm -0.13 (x1e-3 Brier); val 58.196.
+- **C** `src/model_c.py` + `src/fit_c.py`: per-tick examples from train+val histories (271k, past-only features): type, signal, EW win rates (hl 4/8/32),
+  per-machine adaptive lag-agreement x_h*r_h for 36 lag hypotheses at two memories (hl 40 and 20), strongest-hypothesis x type, size-state
+  agreement terms k=1..8, episode others' last-tick surprise.
+  - multinomial LR (L2 1e-4), one memory (hl 40): 46.06 (drift .57, shared .41); + fast memory hl 10: 53.24; hl 20: 53.84.
+  - **LightGBM** (rounds by early stopping on an episode-grouped train holdout; trees exported to JSON, pure-Python inference, 3 s): **55.912** | .0587 .0924 .0792 .0622.
+- D starter pooled = reference: 30.00.
+- Blend chosen on train dev split (never on validation): A+B 0.3/0.7 -> 58.199; with Bt: 0.1 A + 0.9 Bt -> 58.202. B+C 50/50 = 57.73 (C does not help on main).
+- **Synthetic changed-structure kit** (`src/synth_kit.py`: pairs (3,6),(1,8),(2,4), size lag untied uniform 1..8, drift/shared/short like main), points /40:
+  A 21.55 | **B 37.68** | Bn 36.99 | C 36.49 | D 21.47. fit_b recovers the 3 new pairs (.32-.35 each) and an untied k (≈uniform). Dev blend picks B alone.
+- **Runner** `src/round2_run.py <kit> --tag <t>` (~4 min main kit, 6 procs; restartable, cached per step): fits B/Bn/C/C_dev, starter, predicts val+test,
+  fast + official scores, dev/confirm Brier, B retune (Bt), dev-chosen blend -> runs/R2-<t>/<model>/. `--package <A|B|Bt|C|blend>` builds entry +
+  zip, fresh-folder py3.13 -I rerun byte-identical: verified B (24 s), C (3 s, 0.96 MB), blend A+B (77 s).
