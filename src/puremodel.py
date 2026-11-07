@@ -125,6 +125,13 @@ class WinFilter:
                 s1 = [sig(mu + self.D[id_] + self.B[ib] * x + P["delta"]) for ib in range(nb) for id_ in range(nd)]
                 self.tables[(mt, x)] = (s0, s1)
 
+    def mixtables(self, mtype):
+        key = (mtype, 0.0)
+        if key not in self.tables:
+            a0, a1 = self.tables[(mtype, -1.0)]; b0, b1 = self.tables[(mtype, 1.0)]
+            self.tables[key] = ([0.5 * (u + v) for u, v in zip(a0, b0)], [0.5 * (u + v) for u, v in zip(a1, b1)])
+        return self.tables[key]
+
     def sigtables(self, mtype, x, sigv):
         P = self.P; g = P["gam"][mtype] if isinstance(P["gam"], dict) else P["gam"]
         mu = P["mu"][mtype] + g * sigv; nb, nd = self.nb, self.nd
@@ -178,12 +185,18 @@ class WinFilter:
             for t in ticks:
                 va = s.get(t - a); vb = s.get(t - b)
                 if va is None or vb is None:
-                    continue
+                    if not P.get("useold"):
+                        continue
+                    x = 0.0
+                else:
+                    x = 1.0 if (va > 0) != (vb > 0) else -1.0
                 if last is not None:
                     post = self.step(post, t - last)
                 last = t
-                x = 1.0 if (va > 0) != (vb > 0) else -1.0
-                s0, s1 = self.tables[(mtype, x)]
+                if x == 0.0:
+                    s0, s1 = self.mixtables(mtype)
+                else:
+                    s0, s1 = self.tables[(mtype, x)]
                 y = s[t]; pz = PZ[t]; qz = 1 - pz
                 if L and t >= c - L:
                     rec[t] = qz * math.fsum(u * w for u, w in zip(post, s0)) + pz * math.fsum(u * w for u, w in zip(post, s1))
@@ -214,6 +227,7 @@ class WinFilter:
             return [1 - w0 - w1] + [w0 * A[i] + w1 * Bs[i] for i in range(4)], []
         mx = max(lev[i] for i in ok)
         wts = {i: math.exp(P["evt"] * (lev[i] - mx)) for i in ok}; Z = math.fsum(wts.values())
+        self.info = {"pair_wmax": max(wts.values()) / Z, "npairs_ok": len(ok)}
         common = sorted(set.intersection(*[set(recs[i]) for i in ok]))
         rec = [(t, math.fsum(wts[i] * recs[i][t] for i in ok) / Z, 1 if s[t] > 0 else 0) for t in common]
         return [math.fsum(wts[i] * preds[i][j] for i in ok) / Z for j in range(5)], rec
@@ -222,6 +236,22 @@ def predict_query(F, s, c, mtype, P, sigv=0):
     ticks = sorted(t for t in s if t < c)
     pz_at = size_rule(s, ticks, c, mtype, P)
     return F.machine(s, c, mtype, ticks, pz_at, sigv)
+
+def blend_fast(p, rec, pf, recf, c, P):
+    """Blend slow and fast filters by discounted recent predictive log-likelihood of win/loss."""
+    if not rec or not recf:
+        return p, rec
+    g = 0.5 ** (1.0 / P["vhl"]); ls = lf = 0.0
+    df = dict((t, q) for t, q, y in recf)
+    for t, q, y in rec:
+        if t not in df: continue
+        w = g ** (c - 1 - t); qf = min(max(df[t], 1e-9), 1 - 1e-9); q = min(max(q, 1e-9), 1 - 1e-9)
+        ls += w * math.log(q if y else 1 - q); lf += w * math.log(qf if y else 1 - qf)
+    m = max(ls, lf + math.log(P["vprior"] / (1 - P["vprior"])))
+    a = math.exp(ls - m); b = math.exp(lf + math.log(P["vprior"] / (1 - P["vprior"])) - m); wf = b / (a + b)
+    pb = [(1 - wf) * u + wf * v for u, v in zip(p, pf)]
+    rb = [(t, (1 - wf) * q + wf * df.get(t, q), y) for t, q, y in rec]
+    return pb, rb
 
 def logit(p):
     p = min(max(p, 1e-9), 1 - 1e-9)
@@ -242,10 +272,32 @@ def episode_offset(recs, c, P, hl=None, tau=None):
         e -= gr / h
     return e
 
-def finalize(p, e, P, nh=999):
+FEATS = ("base_logit", "fast8", "slow", "surprise8", "ep_off", "short", "pair_unc", "signal")
+
+def features(p, e, rec, hist, nh, info, sigv):
+    """Correction features; all from ticks < cutoff. Returned for offline fitting."""
+    s, c = hist
+    pw = 1 - p[0]
+    lt = [s[t] > 0 for t in range(c - 8, c) if t in s]
+    fast = (sum(lt) + 0.5) / (len(lt) + 1)
+    allw = [v > 0 for t, v in s.items() if t < c]
+    slow = (sum(allw) + 0.5) / (len(allw) + 1)
+    sur = [y - q for t, q, y in rec if t >= c - 8]
+    return [logit(pw), logit(fast) - logit(slow), logit(slow) - logit(pw), (sum(sur) / len(sur)) if sur else 0.0,
+            e, 1.0 if nh < 100 else 0.0, 1.0 - info["pair_wmax"], float(sigv)]
+
+def corr_feats(P, p, e, rec, hist, nh, info, sigv):
+    cw = P.get("corr")
+    if not cw:
+        return 0.0
+    f = features(p, e, rec, hist, nh, info, sigv)
+    f[0] = 0.0  # base logit enters via the slope term below
+    return cw["b0"] + (cw["slope"] - 1.0) * logit(1 - p[0]) + math.fsum(w * x for w, x in zip(cw["w"], f))
+
+def finalize(p, e, P, nh=999, corr=0.0):
     tmp = P.get("tshort", 1.0) if nh < 100 else P.get("tlong", 1.0)
-    if e or tmp != 1.0:
-        pw = 1 - p[0]; pw2 = sig(tmp * logit(pw) + P.get("ekap", 1.0) * e)
+    if e or tmp != 1.0 or corr:
+        pw = 1 - p[0]; pw2 = sig(tmp * logit(pw) + P.get("ekap", 1.0) * e + corr)
         p = [1 - pw2] + [v * pw2 / pw for v in p[1:]]
     p = [min(max(v, P["floor"]), 1.0) for v in p]
     z = math.fsum(p)
@@ -254,7 +306,18 @@ def finalize(p, e, P, nh=999):
 def _work(args):
     P, items = args
     F = WinFilter(P)
-    raw = [(qid, ep, c) + predict_query(F, s, c, mt, P, sg) for qid, ep, s, c, mt, sg in items]
+    raw = []; infos = {}
+    FF = None
+    if P.get("fast"):
+        PF = dict(P); PF.update(P["fast"]); FF = WinFilter(PF)
+    for qid, ep, s, c, mt, sg in items:
+        F.info = {"pair_wmax": 1.0, "npairs_ok": 0}
+        p, rec = predict_query(F, s, c, mt, P, sg); infos[qid] = F.info
+        if FF is not None:
+            pf, recf = predict_query(FF, s, c, mt, P, sg)
+            p, rec = blend_fast(p, rec, pf, recf, c, P)
+        raw.append((qid, ep, c, p, rec))
+    items_by = {it[0]: (it[2], it[3]) for it in items}; items_sig = {it[0]: it[5] for it in items}
     nhist = {it[0]: sum(1 for t in it[2] if t < it[3]) for it in items}
     by_ep = defaultdict(list)
     for qid, ep, c, p, rec in raw:
@@ -264,10 +327,17 @@ def _work(args):
         e = 0.0
         if P.get("eL", 0):
             others = [r for r in by_ep[ep] if r is not rec] if P.get("eloo") else by_ep[ep]
-            e = episode_offset(others, c, P)
+            if nhist[qid] < P.get("nshort", 0):
+                e = episode_offset(others, c, P, P.get("ehl_s"), P.get("etau_s"))
+            else:
+                e = episode_offset(others, c, P)
         if P.get("stau"):
             e += episode_offset([rec], c, P, P["shl"], P["stau"])
-        out.append((qid, finalize(p, e, P, nhist[qid])))
+        if P.get("feat"):
+            hist = items_by[qid]
+            out.append((qid, finalize(p, e, P, nhist[qid]), features(p, e, rec, hist, nhist[qid], infos[qid], items_sig[qid])))
+        else:
+            out.append((qid, finalize(p, e, P, nhist[qid], corr_feats(P, p, e, rec, items_by[qid], nhist[qid], infos[qid], items_sig[qid]))))
     return out
 
 def predict_split(d, P, workers=1):

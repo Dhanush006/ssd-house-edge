@@ -5,6 +5,9 @@ runs/*
 !runs/05-eps/
 runs/05-eps/*
 !runs/05-eps/entry/
+!runs/06-lowjump/
+runs/06-lowjump/*
+!runs/06-lowjump/entry/
 __pycache__/
 *.pyc
 .venv/
