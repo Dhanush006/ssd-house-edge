@@ -27,10 +27,12 @@ Everything below is rehearsed. Do not change code during the window.
 | line | meaning | expected time (rehearsed) |
 |---|---|---|
 | `schema: ...` / `schema test: ...` | what the kit contains (payout columns, machines per episode, cutoffs, types) | 1 s |
-| `DESKTOP SAFE <- P` | pooled fallback entry is valid and on the Desktop | < 10 s |
-| `DESKTOP SAFE <- B` | structured model B is valid and on the Desktop (replaces P) | 2-4 min |
-| `DESKTOP FINAL <- <model>` | the picked entry is valid and on the Desktop | 3-8 min |
-| `DONE` | finished | 3-8 min |
+| `DESKTOP SAFE <- P` | pooled fallback entry is valid and on the Desktop | 3 s (6 s loaded) |
+| `DESKTOP SAFE <- B` | structured model B is valid and on the Desktop (replaces P) | 95 s idle; 3-6 min if the laptop is busy |
+| `DESKTOP FINAL <- <model>` | the picked entry is valid and on the Desktop | 4.3 min idle; up to 9-10 min busy |
+| `DONE` | finished | same as FINAL |
+
+Rehearsed on the main kit (idle laptop, 6 workers): P 3 s, B 95 s, FINAL 259 s; packaged entry runtime 26 s on 2 workers (limit 30 min).
 
 4. Upload as soon as `DESKTOP SAFE <- B` appears (a valid upload early is insurance; the latest Form response counts):
    - CSV: `~/Desktop/SSD-HouseEdge-R2/SAFE/submission.csv`
@@ -38,7 +40,7 @@ Everything below is rehearsed. Do not change code during the window.
 5. When `DONE` appears, upload again from `~/Desktop/SSD-HouseEdge-R2/FINAL/` (if it differs from SAFE: compare `INFO.txt`).
 
 ## 2. If there are more than 25 minutes left after `DONE`
-Run the full mode (reuses the fitted models; adds the filter-rate retune Bt and more dev pseudo-queries; about 10-15 min):
+Run the full mode (reuses the fitted models; adds the filter-rate retune Bt, model A and 8 dev offsets; rehearsed 470 s = 8 min on main):
 
 ```sh
 .venv/bin/python src/round2_run.py KIT --tag R2 | tee _r2kit_full.log
@@ -56,6 +58,7 @@ Information lines in stage 2 (no action needed; each change is kept only if the 
 
 | flag | meaning | action |
 |---|---|---|
+| `KIT_IS_MAIN_ROUND` | the folder is the main-round kit, not adaptation | stop (Ctrl-C) and pass `.../adaptation/public` |
 | `NEW_TEST_TYPES [...]` | test has machine types not in train/validation | none: they use the pooled fallback automatically |
 | `MISSING validation/targets.csv` / `NO_VALIDATION_TARGETS` | no validation answers: B fits its tables from histories | none; the pick uses the dev split only |
 | `NO_TARGETS_FIT` | B fitted without targets (less exact) | none; the pick decides between B, C and the blend |
