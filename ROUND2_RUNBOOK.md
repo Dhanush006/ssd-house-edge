@@ -42,6 +42,12 @@ Run the full mode (reuses the fitted models; adds the filter-rate retune Bt and 
 
 Upload from `FINAL/` again only if it finishes with `DONE` at least 5 minutes before the deadline. If not, keep the fast upload.
 
+Information lines in stage 2 (no action needed; each change is kept only if the dev AND the confirm split improve):
+- `neighbor term: best lag k g=... -> KEEP|no`: adds the other machines' win surprise at lag k to model B.
+- `evidence half-life H: ... -> KEEP|no`: model B forgets old rule evidence (helps when a machine's rule changes inside its history).
+- `blend (dev-selected) {...}`: B/C weights chosen on the dev split.
+- If B changes in stage 2, B is re-predicted and re-packaged before FINAL (the SAFE copy is the older B; FINAL is the one to upload).
+
 ## 3. Warning flags (printed on the `flags:` line and as `FLAG ...` lines)
 
 | flag | meaning | action |
