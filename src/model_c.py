@@ -17,6 +17,9 @@ PAY = (0, 1, 2, 5, 20)
 TYPES = ("steady", "balanced", "jackpot")
 HYPS = [(a, b) for a in range(1, 9) for b in range(a + 1, 9)] + [(a, 0) for a in range(1, 9)]
 HL_R = 40.0
+FEAT2 = False
+PAIRS8 = [(a, b) for a in range(1, 9) for b in range(a + 1, 9)]
+CNTK = (3, 5, 8)
 HL_F = 10.0
 
 
@@ -47,7 +50,7 @@ def xval(s, t, h):
     return 1.0 if (va > 0) != (vb > 0) else -1.0
 
 
-def machine_feats(s, mtype, sigv, targets, epwin):
+def machine_feats(s, mtype, sigv, targets, epwin, ctx=None):
     """Yield (t, feature list) for each t in targets (sorted), using ticks < t only.
     epwin(t) -> other machines' (last-tick win share - EW rate) or 0."""
     ticks = sorted(s)
@@ -58,6 +61,24 @@ def machine_feats(s, mtype, sigv, targets, epwin):
     snum = [0.0] * 8; sden = [0.0] * 8
     w8 = [0.5, 1.0]; w32 = [0.5, 1.0]; bg = [0.5, 1.0]
     nobs = 0; i = 0; out = []
+    if FEAT2:
+        cw = [[0.0] * 4 for _ in PAIRS8]; cd = [[0.0] * 4 for _ in PAIRS8]
+        ncr = [[0.0, 0.0] for _ in range(14)]; ncn = [[0.0, 0.0] for _ in CNTK]
+        others = [] if ctx is None else [ctx[0][(ctx[1] + r) % len(ctx[0])] for r in range(1, len(ctx[0]))]
+
+        def cell(tt, a, b):
+            va = s.get(tt - a); vb = s.get(tt - b)
+            return None if va is None or vb is None else 2 * (va > 0) + (vb > 0)
+
+        def crx(tt, j):
+            r, l = divmod(j, 2)
+            if r >= len(others): return 0.0
+            v = others[r].get(tt - l - 1)
+            return 0.0 if v is None else (1.0 if v > 0 else -1.0)
+
+        def cnx(tt, n):
+            v = [s.get(tt - j) for j in range(1, n + 1)]
+            return 0.0 if None in v else (2.0 * sum(u > 0 for u in v) - n) / n
     oh = [1.0 if mtype == t else 0.0 for t in TYPES]
     for tq in targets:
         while i < len(ticks) and ticks[i] < tq:
@@ -75,6 +96,17 @@ def machine_feats(s, mtype, sigv, targets, epwin):
                         snum[k - 1] = snum[k - 1] * lam + (1.0 if u >= 2 else -1.0) * big; sden[k - 1] = sden[k - 1] * lam + 1.0
                 bg = [bg[0] * g32 + (1.0 if y >= 2 else 0.0), bg[1] * g32 + 1.0]
             w4 = [w4[0] * g4 + (y > 0), w4[1] * g4 + 1.0]; w8 = [w8[0] * g8 + (y > 0), w8[1] * g8 + 1.0]; w32 = [w32[0] * g32 + (y > 0), w32[1] * g32 + 1.0]
+            if FEAT2:
+                for j, (a, b) in enumerate(PAIRS8):
+                    cc = cell(t, a, b)
+                    if cc is not None:
+                        cw[j][cc] = cw[j][cc] * lam + (y > 0); cd[j][cc] = cd[j][cc] * lam + 1.0
+                for j in range(14):
+                    x = crx(t, j)
+                    if x: ncr[j][0] = ncr[j][0] * lam + x * w; ncr[j][1] = ncr[j][1] * lam + 1.0
+                for j, n in enumerate(CNTK):
+                    x = cnx(t, n)
+                    if x: ncn[j][0] = ncn[j][0] * lam + x * w; ncn[j][1] = ncn[j][1] * lam + 1.0
             nobs += 1; i += 1
         f = list(oh) + [float(sigv), 1.0 if nobs < 100 else 0.0, lg(w4[0] / w4[1]), lg(w8[0] / w8[1]), lg(w32[0] / w32[1]), bg[0] / bg[1] - 0.5]
         best = 0.0; bestr = 0.0
@@ -96,6 +128,15 @@ def machine_feats(s, mtype, sigv, targets, epwin):
             g = 0.0 if u is None else (1.0 if u >= 2 else -1.0)
             f.append(g * snum[k - 1] / (sden[k - 1] + 4.0))
         f.append(epwin(tq))
+        if FEAT2:
+            base = w32[0] / w32[1]
+            for j, (a, b) in enumerate(PAIRS8):
+                cc = cell(tq, a, b)
+                f.append(0.0 if cc is None else (cw[j][cc] + 2 * base) / (cd[j][cc] + 2) - base)
+            for j in range(14):
+                f.append(crx(tq, j) * ncr[j][0] / (ncr[j][1] + 4.0))
+            for j, n in enumerate(CNTK):
+                f.append(cnx(tq, n) * ncn[j][0] / (ncn[j][1] + 4.0))
         out.append((tq, f))
     return out
 
@@ -145,7 +186,8 @@ def gbm_pred(T, f):
 def predict_items(items, P):
     """items: (qid, episode, history{t:payout}, cutoff, type, signal); histories may include ticks >= cutoff."""
     global HL_R, HL_F
-    HL_R = P.get("hlr", 40.0); HL_F = P.get("hlf", 10.0)
+    global FEAT2
+    HL_R = P.get("hlr", 40.0); HL_F = P.get("hlf", 10.0); FEAT2 = P.get("feat2", False)
     by_ep = defaultdict(list)
     for it in items:
         by_ep[it[1]].append(it)
@@ -154,9 +196,9 @@ def predict_items(items, P):
         qq = sorted(by_ep[ep], key=lambda r: r[0])
         cut = {it[0]: it[3] for it in qq}
         Hs = {it[0]: {t: v for t, v in it[2].items() if t < it[3]} for it in qq}
-        es = episode_signal(Hs, cut)
-        for qid, _, _, c, mt, sg in qq:
-            (_, f), = machine_feats(Hs[qid], mt, sg, [c], lambda t, q=qid: es(q, t))
+        es = episode_signal(Hs, cut); hl = [Hs[it[0]] for it in qq]
+        for n, (qid, _, _, c, mt, sg) in enumerate(qq):
+            (_, f), = machine_feats(Hs[qid], mt, sg, [c], lambda t, q=qid: es(q, t), (hl, n))
             if "gbm" in P:
                 p = gbm_pred(P["gbm"], f)
             else:

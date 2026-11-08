@@ -68,12 +68,12 @@ def main():
                 s[c] = lab[q["query_id"]]
             mach.append(dict(q=q, s=s, c=c, mt=q["machine_type"], sig=int(q["signal"]), tg=tg.get(q["query_id"])))
     # ---- size tables
-    SS = {}; zq = {}
+    SS = {}; zq = {}; DIAG = {"max_dev": {}}
     for mt in TYPES:
         rows = [m for m in mach if m["mt"] == mt and m["tg"]]
         Q = [[p / (1 - m["tg"][0]) for p in m["tg"][1:]] for m in rows]
         c2, a, spread = two_means(Q)
-        SS[mt] = c2
+        SS[mt] = c2; DIAG["max_dev"][mt] = round(spread, 4)
         for m, ai in zip(rows, a):
             zq[m["q"]["query_id"]] = int(ai)
         print(f"fit_b tables {mt}: n={len(rows)} z1={int(a.sum())} max_dev={spread:.4f} A={[round(x, 3) for x in c2[0]]} B={[round(x, 3) for x in c2[1]]}")
@@ -81,16 +81,20 @@ def main():
         SS = em_tables(mach, SS)
     P["size_states"] = SS
     # ---- per-machine evidence
-    hyps = M.ALL_HYPS; nh = len(hyps); nk = len(M.KS)
+    hyps = M.ALL_HYPS if "--base" in sys.argv else M.FULL_HYPS; nh = len(hyps); nk = len(M.KS)
+    # episode context (other machines of the same episode, sorted by query id) for cross-machine hypotheses
+    byep = defaultdict(list)
+    for i, m in enumerate(mach): byep[m["q"]["episode_id"]].append(i)
+    for ep, ix in byep.items():
+        ix.sort(key=lambda i: mach[i]["q"]["query_id"]); hs = [mach[i]["s"] for i in ix]
+        for n, i in enumerate(ix): mach[i]["ctx"] = (hs, n)
+    eps = sorted(byep); chunks = [[i for e in eps[w::6] for i in byep[e]] for w in range(6)]
+    import multiprocessing as mp
+    with mp.get_context("spawn").Pool(6) as pool:
+        res = pool.map(_evid, [([(mach[i]["s"], mach[i]["ctx"], SS[mach[i]["mt"]]) for i in ch], hyps, P["swin"]) for ch in chunks])
     BB = np.zeros((len(mach), nh)); LS = np.zeros((len(mach), nk))
-    for i, m in enumerate(mach):
-        s = m["s"]; ticks = sorted(s)
-        tc = M.common_ticks(s, ticks, 8)
-        for j, h in enumerate(hyps):
-            BB[i, j] = M.screen_ll(s, tc, h, P["swin"])
-        szh, szl = M.size_ll(s, ticks, SS[m["mt"]], [0.01])
-        for k in M.KS:
-            LS[i, k] = M.lse([szl[n] for n, (kk, ze, ep) in enumerate(szh) if kk == k]) - math.log(2)
+    for ch, (bb, ls) in zip(chunks, res):
+        BB[ch] = bb; LS[ch] = ls
     # ---- EM for joint prior pi[h,k]
     L = BB[:, :, None] + LS[:, None, :]
     pi = np.full((nh, nk), 1.0 / (nh * nk))
@@ -100,19 +104,19 @@ def main():
     ph = pi.sum(1); pk = pi.sum(0)
     rh = r.sum(2)
     top = np.argsort(-ph)[:8]
-    print("fit_b win hyps (prior): " + " ".join(f"{hyps[j]}:{ph[j]:.3f}" for j in top))
+    print("fit_b win hyps (prior): " + " ".join(f"{M.hkey(hyps[j])}:{ph[j]:.3f}" for j in top))
     print("fit_b size k marginal: " + " ".join(f"k{k}:{pk[k]:.3f}" for k in M.KS))
     for j in top[:6]:
         if ph[j] < 0.01: continue
         ck = pi[j] / ph[j]
-        print(f"fit_b   k|{hyps[j]}: " + " ".join(f"k{k}:{ck[k]:.2f}" for k in M.KS if ck[k] > 0.02))
+        print(f"fit_b   k|{M.hkey(hyps[j])}: " + " ".join(f"k{k}:{ck[k]:.2f}" for k in M.KS if ck[k] > 0.02))
     if naive:
-        P["hyps"] = [list(h) for h in hyps]; P["hprior"] = [1.0 / nh] * nh
+        P["hyps"] = [M.hkey(h) for h in hyps]; P["hprior"] = [1.0 / nh] * nh
         P["kprior"] = {"-1,-1": [1.0 / nk] * nk}
     else:
         rho = 0.002
         hp = (1 - rho) * ph + rho / nh
-        P["hyps"] = [list(h) for h in hyps]; P["hprior"] = [float(x) for x in hp]
+        P["hyps"] = [M.hkey(h) for h in hyps]; P["hprior"] = [float(x) for x in hp]
         kp = {}
         for j, h in enumerate(hyps):
             ck = (pi[j] + 0.02 * ph[j] * pk) / (ph[j] * 1.02)
@@ -125,7 +129,7 @@ def main():
     for i, m in enumerate(mach):
         if not m["tg"]: continue
         pw = 1 - m["tg"][0]; z = zq[m["q"]["query_id"]]
-        h = hyps[int(rh[i].argmax())]; xv = M.xval(m["s"], m["c"], h) or 0.0
+        h = hyps[int(rh[i].argmax())]; xv = M.xval(m["s"], m["c"], h, m["ctx"]) or 0.0
         X.append([1.0 * (m["mt"] == t) for t in TYPES] + [z, m["sig"]]); Y.append(M.logit(pw)); XV.append(xv)
     X = np.array(X); Y = np.array(Y); XV = np.array(XV)
     # mixture regression: Y = type + delta z + gam sig + bmag * (sign_m * x) + d ; sign_m alternated
@@ -145,10 +149,24 @@ def main():
     P["bsd"] = round(float(np.clip(np.abs(res).std(), 0.3, 0.8)), 3)
     P["bmax"] = round(max(3.5, P["bmag"] + 1.2), 3)
     res = res  # residual sd reported below
+    DIAG["top_h"] = [[M.hkey(hyps[j]), round(float(ph[j]), 4)] for j in top]
+    DIAG["k_marg"] = [round(float(x), 4) for x in pk]; DIAG["none_mass"] = round(float(ph[hyps.index(("none",))]), 4)
+    DIAG["resid_sd"] = round(float(res.std()), 3); P["diag"] = DIAG
     print(f"fit_b mu={P['mu']} delta={P['delta']} gam_raw={g:.3f} bmag={P['bmag']} bsd={P['bsd']} resid_sd={res.std():.3f}")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(P, indent=1, sort_keys=True) + "\n")
     print("fit_b wrote", out)
+
+
+def _evid(args):
+    rows, hyps, swin = args
+    bb = []; ls = []
+    for s, ctx, tabs in rows:
+        ticks = sorted(s); tc = M.common_ticks(s, ticks, 8)
+        bb.append([M.screen_ll(s, tc, h, swin, ctx) for h in hyps])
+        szh, szl = M.size_ll(s, ticks, tabs, [0.01])
+        ls.append([M.lse([szl[n] for n, (kk, ze, ep) in enumerate(szh) if kk == k]) - math.log(2) for k in M.KS])
+    return bb, ls
 
 
 def em_tables(mach, SS):

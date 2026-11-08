@@ -20,7 +20,7 @@ import r2score as S
 PY = sys.executable
 CONDS = S.CONDS
 MODS = {"A": ("model", AENT / "model.py"), "B": ("model_b", SRC / "model_b.py"), "Bn": ("model_b", SRC / "model_b.py"),
-        "Bt": ("model_b", SRC / "model_b.py"), "C": ("model_c", SRC / "model_c.py")}
+        "Bt": ("model_b", SRC / "model_b.py"), "B0": ("model_b", SRC / "model_b.py"), "C": ("model_c", SRC / "model_c.py")}
 
 
 def log(*a):
@@ -107,7 +107,7 @@ def evaluate(kit, tag, force, workers, tune=True):
     log(f"kit={pub} round={meta.get('round')} max_points={meta.get('max_points')} out={out}")
     t0 = time.time()
     # fits
-    for name, args in (("B", []), ("Bn", ["--naive"])):
+    for name, args in (("B", []), ("B0", ["--base"]), ("Bn", ["--naive"])):
         pf = out / name / "params.json"
         if force or not pf.exists():
             o = sh([PY, str(SRC / "fit_b.py"), str(pub), str(pf)] + args)
@@ -128,7 +128,7 @@ def evaluate(kit, tag, force, workers, tune=True):
         sh([PY, "run_starter.py", "--data", str(pub), "--out", str(dd), "--method", "pooled_recent"], cwd=kd, soft=True)
     # predictions
     preds = {}
-    for name in ("A", "B", "Bn", "C"):
+    for name in ("A", "B", "B0", "Bn", "C"):
         P = json.loads((out / name / "params.json").read_text()); M = mod(name)
         for split, fn in (("validation", "validation_predictions.csv"), ("test", "submission.csv")):
             f = out / name / fn
@@ -144,7 +144,7 @@ def evaluate(kit, tag, force, workers, tune=True):
         preds["D"] = S.load_csv(dd / "validation_predictions.csv")
     Sc = S.Scorer(pub)
     log("---- validation (fast replica) ----")
-    for name in ("A", "B", "Bn", "C", "D"):
+    for name in ("A", "B", "B0", "Bn", "C", "D"):
         if name in preds: log(Sc.line(name, preds[name]))
     log("---- official checker ----")
     for name in ("A", "B", "C"):
@@ -195,10 +195,48 @@ def evaluate(kit, tag, force, workers, tune=True):
     log(Sc.line("blend", bl))
     for a, b in (("B", "C"),):
         log(Sc.line(f"{a}+{b} 50/50", mix(preds, {a: .5, b: .5})))
-    log(f"done {time.time() - t0:.0f}s. package with: {PY} src/round2_run.py {kit} --tag {tag} --package <A|B|C|blend>")
+    # ---- recommendation (conservative: dev + confirm Brier on the new kit's train split) ----
+    allm = {m: dev[m] for m in cands}; allm["blend"] = mix(dev, ws)
+    rows = {}
+    for m, pr in allm.items():
+        d_, pc = dev_brier(pr, dmeta, "dev"); c_, _ = dev_brier(pr, dmeta, "confirm"); rows[m] = (d_, c_, (d_ + c_) / 2)
+    bestm = min(rows, key=lambda m: (rows[m][2], m)); tol = float(os.environ.get("R2_TOL", "0.0003"))
+    pref = [m for m in ("B", "Bt", "blend", "C", "A") if m in rows]  # conservative: simplest within noise of the best
+    pick = next(m for m in pref + [bestm] if rows[m][2] <= rows[bestm][2] + tol)
+    vp = {m: Sc.score(preds[m])[0] for m in preds}; vp["blend"] = Sc.score(bl)[0]
+    vr = {m: Sc.score(preds[m])[2] for m in preds}
+    Pb = json.loads((out / "B" / "params.json").read_text()); dg = Pb.get("diag", {})
+    flags = []
+    th = dg.get("top_h", [])
+    fam = defaultdict(float)
+    for h, w in zip(Pb["hyps"], Pb["hprior"]):
+        k = h if isinstance(h, str) else f"{h[0]},{h[1]}"
+        fam[k.split(":")[0] if ":" in k else ("none" if k == "0,0" else ("lag" if k.endswith(",0") else "xor"))] += w
+    fams = sorted(fam.items(), key=lambda kv: -kv[1])
+    if fams and fams[0][1] < 0.5: flags.append("NO_DOMINANT_RULE_FAMILY (B's family may not contain the rule)")
+    if th and sum(v for _, v in th[:12]) < 0.15 and fams and fams[0][0] in ("none",): flags.append("NO_SHARP_HYPOTHESES")
+    if dg.get("none_mass", 0) > 0.2: flags.append(f"NONE_MASS={dg['none_mass']} (many machines look structureless)")
+    if max(dg.get("max_dev", {"x": 0}).values()) > 0.02: flags.append(f"SIZE_TABLES_MISFIT max_dev={dg['max_dev']} (more than 2 size states?)")
+    if "C" in rows and rows["C"][2] < rows["B"][2]: flags.append("C_BEATS_B_ON_DEV (structured model misspecified)")
+    dif = sum(sum(abs(a - b) for a, b in zip(preds["B"][q], preds["C"][q])) for q in preds["B"]) / len(preds["B"])
+    if dif > 0.15: flags.append(f"B_C_DISAGREE mean L1={dif:.3f}")
+    if pick != "blend" and pick in vp and max(vp.values()) - vp[pick] > 1.0: flags.append("VALIDATION_DISAGREES_WITH_DEV_PICK (check)")
+    log("==== DIAGNOSTICS ====")
+    log("top win hypotheses (prior mass):", " ".join(f"({k}):{v}" for k, v in th))
+    log("rule families (prior mass):", " ".join(f"{k}:{v:.3f}" for k, v in fams[:6]))
+    log("size-lag marginal k0..k8:", dg.get("k_marg"), "| size table max_dev:", dg.get("max_dev"), "| resid_sd:", dg.get("resid_sd"))
+    for m in sorted(vr): log(f"val ratios {m:<5}", " ".join(f"{c[:6]}={vr[m][c]:.4f}" for c in CONDS))
+    log("==== RECOMMENDATION ====")
+    for m in sorted(rows, key=lambda m: rows[m][2]):
+        log(f"{m:<6} dev={1e3 * rows[m][0]:.2f} confirm={1e3 * rows[m][1]:.2f} mean={1e3 * rows[m][2]:.2f} val_points={vp.get(m, float('nan')):.3f}")
+    log(f"best by dev+confirm = {bestm}; tolerance {tol * 1e3:.2f}e-3 -> conservative pick")
+    log(f"PICK = {pick}" + (f" weights={ws}" if pick == "blend" else ""), "| flags:", "; ".join(flags) or "none")
+    (out / "summary.json").write_text(json.dumps({"val_points": vp, "dev": {m: r[0] for m, r in rows.items()},
+        "confirm": {m: r[1] for m, r in rows.items()}, "pick": pick, "blend": ws, "flags": flags, "diag": dg}, indent=1) + "\n")
+    log(f"done {time.time() - t0:.0f}s. package with: {PY} src/round2_run.py {kit} --tag {tag} --package {pick}")
 
 
-def tune_b(out, pub, dev, dmeta, workers, force, ndraw=8):
+def tune_b(out, pub, dev, dmeta, workers, force, ndraw=int(os.environ.get("R2_NDRAW", "5"))):
     """Bounded random search of B's filter rates on the DEV split only; keep the best draw as Bt only if it
     also beats B on the untouched confirm split."""
     td = out / "Bt"
@@ -218,6 +256,12 @@ def tune_b(out, pub, dev, dmeta, workers, force, ndraw=8):
         pr = pool_predict(M, items, P, workers); m, _ = dev_brier(pr, dmeta, "dev")
         log(f"tune {i}: qb={P['qb']} jump={P['jump']} qd={P['qd']} etau={P['etau']} dev={1e3 * m:.2f} (B {1e3 * b_dev:.2f})")
         if best is None or m < best[0]: best = (m, P, pr)
+    gr = base.get("gam_raw", 0.0)
+    if abs(gr) > 0.1:  # signal term: candidate only, kept if dev says so
+        P = dict(base); P["gam"] = gr
+        pr = pool_predict(M, items, P, workers); m, _ = dev_brier(pr, dmeta, "dev")
+        log(f"tune gam={gr}: dev={1e3 * m:.2f}")
+        if m < best[0]: best = (m, P, pr)
     mc, _ = dev_brier(best[2], dmeta, "confirm")
     ok = best[0] < b_dev and mc < b_conf
     log(f"tune best dev={1e3 * best[0]:.2f} confirm={1e3 * mc:.2f} vs B dev={1e3 * b_dev:.2f} confirm={1e3 * b_conf:.2f} -> {'keep Bt' if ok else 'no Bt'}")

@@ -47,24 +47,72 @@ def linspace(a, b, n):
     return [a + (b - a) * i / (n - 1) for i in range(n)]
 
 
+OLDK = ("xor", "lag", "none")
+
+
+def to_h(h):
+    """Accept old [a, b] lists (xor / single lag / none) or key strings 'kind:i,j'."""
+    if isinstance(h, str):
+        if ":" not in h:
+            h = [int(v) for v in h.split(",")]
+        else:
+            k, a = h.split(":"); return (k,) + tuple(int(v) for v in a.split(",")) if a else (k,)
+    a, b = int(h[0]), int(h[1])
+    if a < 0: return ("fallback",)
+    if a == 0: return ("none",)
+    if b == 0: return ("lag", a)
+    return ("xor", a, b)
+
+
 def hkey(h):
-    return f"{h[0]},{h[1]}"
+    k = h[0]
+    if k == "xor": return f"{h[1]},{h[2]}"
+    if k == "lag": return f"{h[1]},0"
+    if k == "none": return "0,0"
+    return k + ":" + ",".join(str(v) for v in h[1:])
 
 
-def xval(s, t, h):
-    """x for hypothesis h at tick t, or None if a needed lag is unobserved."""
-    a, b = h
-    if a == 0:
+def own_lmax(h):
+    k = h[0]
+    if k in ("none", "cr"): return 1
+    return max(h[1:])
+
+
+def xval(s, t, h, ctx=None):
+    """x for hypothesis h at tick t, or None if a needed observation is missing."""
+    k = h[0]
+    if k == "none":
         return 0.0
-    va = s.get(t - a)
+    if k == "cr":
+        hs, mi = ctx; v = hs[(mi + h[1]) % len(hs)].get(t - h[2])
+        return None if v is None else (1.0 if v > 0 else -1.0)
+    if k == "cnt":
+        n = h[1]; w = 0
+        for j in range(1, n + 1):
+            v = s.get(t - j)
+            if v is None: return None
+            w += v > 0
+        return (2.0 * w - n) / n
+    va = s.get(t - h[1])
     if va is None:
         return None
-    if b == 0:
-        return 1.0 if va > 0 else -1.0
-    vb = s.get(t - b)
+    wa = va > 0
+    if k == "lag":
+        return 1.0 if wa else -1.0
+    vb = s.get(t - h[2])
     if vb is None:
         return None
-    return 1.0 if (va > 0) != (vb > 0) else -1.0
+    wb = vb > 0
+    if k == "xor": r = wa != wb
+    elif k == "and": r = wa and wb
+    elif k == "or": r = wa or wb
+    elif k == "anb": r = wa and not wb
+    elif k == "bna": r = wb and not wa
+    elif k == "p3":
+        vc = s.get(t - h[3])
+        if vc is None: return None
+        r = (wa != wb) != (vc > 0)
+    return 1.0 if r else -1.0
 
 
 def lbb(w, l):
@@ -76,11 +124,11 @@ def common_ticks(s, ticks, lmax):
     return [t for t in ticks if all((t - j) in s for j in range(1, lmax + 1))]
 
 
-def screen_ll(s, ticks_c, h, win):
+def screen_ll(s, ticks_c, h, win, ctx=None):
     """Windowed beta-binomial evidence of win/loss given x under h (separate rates per x per window)."""
     cnt = defaultdict(lambda: [0, 0])
     for t in ticks_c:
-        x = xval(s, t, h)
+        x = xval(s, t, h, ctx)
         cnt[(t // win, x)][0 if s[t] > 0 else 1] += 1
     return math.fsum(lbb(w, l) for w, l in cnt.values())
 
@@ -154,9 +202,9 @@ class WinFilter:
         zd = math.fsum(pdd); self.PD = [x / zd for x in pdd]
         self.prior = [self.PB[ib] * self.PD[id_] for ib in range(nb) for id_ in range(nd)]
         self.tables = {}
-        self.hyps = [tuple(h) for h in P["hyps"]]
+        self.hyps = [to_h(h) for h in P["hyps"]]
         self.hprior = dict(zip(self.hyps, P["hprior"]))
-        self.kprior = {tuple(int(v) for v in k.split(",")): p for k, p in P["kprior"].items()}
+        self.kprior = {to_h(k): p for k, p in P["kprior"].items()}
 
     def tab(self, mtype, x, sigv):
         key = (mtype, x, sigv)
@@ -194,37 +242,39 @@ class WinFilter:
             p = r
         return p
 
-    def candidates(self, s, ticks, mtype, sz_hyps, sz_ll):
+    def candidates(self, s, ticks, mtype, sz_hyps, sz_ll, ctx=None):
         """Screen hypotheses; return list of (h, SizePost, logprior)."""
         P = self.P
-        cand = [h for h in self.hyps if self.hprior[h] >= P["pmin"]]
+        thr = min(P["pmin"], 0.999 * max(self.hprior.values()))
+        cand = [h for h in self.hyps if self.hprior[h] >= thr]
         nep = len(P["epss"])
         out = []
-        lmax = max([max(h) for h in cand] + [1])
+        lmax = max([own_lmax(h) for h in cand] + [1])
         tc = common_ticks(s, ticks, lmax)
         for h in cand:
-            kp = self.kprior.get(h) or self.kprior[(-1, -1)]
+            kp = self.kprior.get(h) or self.kprior[("fallback",)]
             sp = SizePost(s, sz_hyps, sz_ll, kp, nep)
-            sc = math.log(self.hprior[h]) + P["evs"] * screen_ll(s, tc, h, P["swin"]) + sp.logev
+            sc = math.log(self.hprior[h]) + P["evs"] * screen_ll(s, tc, h, P["swin"], ctx) + sp.logev
             out.append((sc, h, sp))
-        out.sort(key=lambda r: (-r[0], r[1]))
+        out.sort(key=lambda r: (-r[0], hkey(r[1])))
         best = out[0][0]
         kept = [r for r in out if r[0] >= best - P["sgap"]][:P["K"]]
         return kept, set(tc)
 
-    def machine(self, s, c, mtype, ticks, sigv=0):
+    def machine(self, s, c, mtype, ticks, sigv=0, ctx=None):
         P = self.P
         A, Bs = self.SS[mtype]
         sz_hyps, sz_ll = size_ll(s, ticks, self.SS[mtype], P["epss"])
-        kept, tcs = self.candidates(s, ticks, mtype, sz_hyps, sz_ll)
+        kept, tcs = self.candidates(s, ticks, mtype, sz_hyps, sz_ll, ctx)
         lev = []; preds = []; recs = []
         L = P.get("eL", 0)
         for sc, h, sp in kept:
             post = list(self.prior); last = None; le = 0.0; rec = {}
             for t in ticks:
-                x = xval(s, t, h)
+                x = xval(s, t, h, ctx)
                 if x is None:
-                    continue
+                    if h[0] != "cr": continue
+                    x = 0.0
                 if last is not None:
                     post = self.step(post, t - last)
                 last = t
@@ -242,7 +292,8 @@ class WinFilter:
                 if t in tcs or not P.get("evcommon", True):
                     le += math.log(z)
                 post = [u / z for u in post]
-            x = xval(s, c, h)
+            x = xval(s, c, h, ctx)
+            if x is None and h[0] == "cr": x = 0.0
             if last is None or x is None:
                 continue
             post = self.step(post, c - last)
@@ -253,7 +304,7 @@ class WinFilter:
             preds.append([1 - w0 - w1] + [w0 * A[i] + w1 * Bs[i] for i in range(4)])
             lev.append(P["evt"] * le + math.log(self.hprior[h])); recs.append(rec)
         if not preds:
-            sp = SizePost(s, sz_hyps, sz_ll, self.kprior[(-1, -1)], len(P["epss"]))
+            sp = SizePost(s, sz_hyps, sz_ll, self.kprior[("fallback",)], len(P["epss"]))
             pzc = sp.pz(c)
             mu = P["mu"][mtype] + P.get("gam", 0.0) * sigv; e0 = sig(mu); e1 = sig(mu + P["delta"])
             w0 = (1 - pzc) * e0; w1 = pzc * e1
@@ -292,9 +343,10 @@ def _work(args):
     P, items = args
     F = WinFilter(P)
     raw = []
+    ctxs = episode_ctx(items)
     for qid, ep, s, c, mt, sg in items:
         ticks = sorted(t for t in s if t < c)
-        p, rec = F.machine(s, c, mt, ticks, sg)
+        p, rec = F.machine(s, c, mt, ticks, sg, ctxs[qid])
         raw.append((qid, ep, c, p, rec))
     by_ep = defaultdict(list)
     for qid, ep, c, p, rec in raw:
@@ -307,6 +359,19 @@ def _work(args):
             e = episode_offset(others, c, P)
         out.append((qid, finalize(p, e, P)))
     return out
+
+
+def episode_ctx(items):
+    """Per query: (histories of the episode's machines at ticks < cutoff, sorted by query id; own index)."""
+    by = defaultdict(list)
+    for it in items:
+        by[it[1]].append(it)
+    ctx = {}
+    for ep, its in by.items():
+        its = sorted(its, key=lambda r: r[0]); hs = [{t: v for t, v in it[2].items() if t < it[3]} for it in its]
+        for i, it in enumerate(its):
+            ctx[it[0]] = (hs, i)
+    return ctx
 
 
 def predict_split(d, P, workers=1):
@@ -326,4 +391,9 @@ def predict_split(d, P, workers=1):
     return dict(_work((P, items)))
 
 
-ALL_HYPS = [(a, b) for a in range(1, 9) for b in range(a + 1, 9)] + [(a, 0) for a in range(1, 9)] + [(0, 0)]
+PAIRS8 = [(a, b) for a in range(1, 9) for b in range(a + 1, 9)]
+ALL_HYPS = [("xor", a, b) for a, b in PAIRS8] + [("lag", a) for a in range(1, 9)] + [("none",)]
+FULL_HYPS = (ALL_HYPS + [(k, a, b) for k in ("and", "or", "anb", "bna") for a, b in PAIRS8]
+             + [("cnt", n) for n in range(2, 9)]
+             + [("p3", a, b, c) for a in range(1, 9) for b in range(a + 1, 9) for c in range(b + 1, 9)]
+             + [("cr", r, l) for r in range(1, 8) for l in range(1, 9)])

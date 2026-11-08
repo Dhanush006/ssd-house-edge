@@ -26,10 +26,11 @@ def examples(pub, split, use_label):
             if q["query_id"] in lab: s[c] = lab[q["query_id"]]
             Hs[q["machine_id"]] = s; cut[q["machine_id"]] = c + 1
         es = episode_signal = M.episode_signal(Hs, cut)
-        for q in qq:
+        hl = [Hs[q["machine_id"]] for q in qq]
+        for n, q in enumerate(qq):
             m = q["machine_id"]; s = Hs[m]
             tg = [t for t in sorted(s) if t >= 9]
-            for t, f in M.machine_feats(s, q["machine_type"], int(q["signal"]), tg, lambda t, m=m: es(m, t)):
+            for t, f in M.machine_feats(s, q["machine_type"], int(q["signal"]), tg, lambda t, m=m: es(m, t), (hl, n)):
                 X.append(f); Y.append(M.PAY.index(s[t])); G.append(ep)
     return X, Y, G
 
@@ -80,7 +81,7 @@ def main():
     lam = float(sys.argv[sys.argv.index("--lam") + 1]) if "--lam" in sys.argv else 1e-4
     t0 = time.time()
     arg = lambda k, d: float(sys.argv[sys.argv.index(k) + 1]) if k in sys.argv else d
-    M.HL_R = arg("--hlr", 40.0); M.HL_F = arg("--hlf", 10.0)
+    M.HL_R = arg("--hlr", 40.0); M.HL_F = arg("--hlf", 10.0); M.FEAT2 = "--feat1" not in sys.argv
     X, Y, G = ([], [], []) if "--valonly" in sys.argv else examples(pub, "train", True)
     if "--trainonly" not in sys.argv:
         X2, Y2, G2 = examples(pub, "validation", False); X += X2; Y += Y2; G += G2
@@ -89,7 +90,7 @@ def main():
     else:
         W, mean, sd, loss = fit(X, Y, lam)
         P = {"W": W.tolist(), "mean": mean.tolist(), "sd": sd.tolist(), "lam": lam, "n": len(Y)}
-    P["hlr"] = M.HL_R; P["hlf"] = M.HL_F
+    P["hlr"] = M.HL_R; P["hlf"] = M.HL_F; P["feat2"] = M.FEAT2
     out.parent.mkdir(parents=True, exist_ok=True); out.write_text(json.dumps(P) + "\n")
     print(f"fit_c n={len(Y)} nf={len(X[0])} lam={lam} loss={loss:.4f} time={time.time() - t0:.0f}s wrote {out}")
 
