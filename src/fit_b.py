@@ -97,6 +97,8 @@ def main():
     ntg = defaultdict(int)
     for m in mach:
         if m["tg"]: ntg[m["mt"]] += 1
+    mc = max([m["c"] for m in mach] + [0])
+    if mc > 1500: P["maxhist"] = 1500  # runtime guard: the filter reads the most recent 1500 ticks only
     notg = sum(ntg.values()) < 2 * MINTYPE
     if notg:
         for m in mach: ntg[m["mt"]] += 1

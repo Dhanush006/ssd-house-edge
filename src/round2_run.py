@@ -36,6 +36,9 @@ def log(*a):
 def paths(kit):
     kit = Path(kit).resolve()
     pub = kit / "public" if (kit / "public" / "test" / "queries.csv").exists() else kit
+    if not (pub / "test" / "queries.csv").exists():  # nested unzip folders: find the shallowest */test/queries.csv
+        hits = sorted((p for p in kit.rglob("queries.csv") if p.parent.name == "test"), key=lambda p: (len(p.parts), str(p)))
+        if hits: pub = hits[0].parent.parent
     kd = pub.parent if (pub.parent / "check_submission.py").exists() else HE / "kit"
     return pub, kd
 
@@ -59,7 +62,8 @@ def setup_schema(pub):
     tq = {sp: KS.read_split(pub / sp, VALS) if (pub / sp / "queries.csv").exists() else ([], {}) for sp in ("train", "validation", "test")}
     types = {sp: sorted(set(q["machine_type"] for q in v[0])) for sp, v in tq.items()}
     fitted = set(types["train"]) | set(types["validation"])
-    STD = VALS == list(KS.DEFAULT_PAY) and set(types["test"]) <= {"steady", "balanced", "jackpot"} and fitted >= {"steady", "balanced", "jackpot"}
+    sigs = set(q["signal"] for v in tq.values() for q in v[0])
+    STD = sigs <= {-1.0, 0.0, 1.0} and VALS == list(KS.DEFAULT_PAY) and set(types["test"]) <= {"steady", "balanced", "jackpot"} and fitted >= {"steady", "balanced", "jackpot"}
     md = KS.metadata(pub)
     log(f"schema: payout columns {cols} | conditions {list(S.CONDS)} | metadata round={md.get('round')} max_points={md.get('max_points')}")
     for sp, (qs, H) in tq.items():
@@ -174,6 +178,12 @@ def val_line(out, name, Sc):
 def evaluate(kit, tag, force, workers, fast=False, tune=True, ablations=False):
     pub, kd = paths(kit); out = HE / "runs" / f"R2-{tag}"; out.mkdir(parents=True, exist_ok=True)
     log(f"kit={pub} out={out} fast={fast} workers={workers}")
+    if OPT["desk"]:
+        old = [d for d in (DESK / "SAFE", DESK / "FINAL") if d.exists()]
+        if old:
+            arc = DESK / "_previous" / time.strftime("%H%M%S"); arc.mkdir(parents=True, exist_ok=True)
+            for d in old: shutil.move(str(d), str(arc / d.name))
+            log(f"moved old Desktop SAFE/FINAL to {arc} (never upload from _previous)")
     setup_schema(pub); Sc = S.Scorer(pub)
     if not Sc.ok: log("FLAG NO_VALIDATION_TARGETS: validation points unavailable; picking by dev split only")
     vp = {}
@@ -211,34 +221,51 @@ def evaluate(kit, tag, force, workers, fast=False, tune=True, ablations=False):
         else: log(f"fit {name}:", (out / name / "fit.log").read_text().strip().splitlines()[-1][:120])
     hasC = (out / "C" / "params.json").exists() and (out / "C_dev" / "params.json").exists()
     if hasC:
-        predict_splits(out, pub, "C", force, workers); vp["C"] = val_line(out, "C", Sc)
+        try:
+            predict_splits(out, pub, "C", force, workers); vp["C"] = val_line(out, "C", Sc)
+        except Exception as e:
+            log("WARN model C prediction failed (C dropped):", repr(e)[:300]); hasC = False
+    hasA = False
     if STD and not fast:
-        if not (out / "A" / "params.json").exists():
-            (out / "A").mkdir(exist_ok=True); shutil.copy(AENT / "params.json", out / "A" / "params.json")
-        predict_splits(out, pub, "A", force, workers); vp["A"] = val_line(out, "A", Sc)
+        try:
+            if not (out / "A" / "params.json").exists():
+                (out / "A").mkdir(exist_ok=True); shutil.copy(AENT / "params.json", out / "A" / "params.json")
+            predict_splits(out, pub, "A", force, workers); vp["A"] = val_line(out, "A", Sc); hasA = True
+        except Exception as e:
+            log("WARN model A failed (dropped):", repr(e)[:300])
     dd = out / "D"
-    if STD and (force or not (dd / "validation_predictions.csv").exists()):
-        sh([PY, "run_starter.py", "--data", pub, "--out", dd, "--method", "pooled_recent"], cwd=kd, soft=True)
-    if (dd / "validation_predictions.csv").exists() and Sc.ok:
-        vp["D"] = Sc.score(S.load_csv(dd / "validation_predictions.csv"))[0]; log("val", Sc.line("D starter", S.load_csv(dd / "validation_predictions.csv")))
+    try:
+        if STD and (force or not (dd / "validation_predictions.csv").exists()):
+            sh([PY, "run_starter.py", "--data", pub, "--out", dd, "--method", "pooled_recent"], cwd=kd, soft=True)
+        if (dd / "validation_predictions.csv").exists() and Sc.ok:
+            vp["D"] = Sc.score(S.load_csv(dd / "validation_predictions.csv"))[0]; log("val", Sc.line("D starter", S.load_csv(dd / "validation_predictions.csv")))
+    except Exception as e:
+        log("WARN starter D skipped:", repr(e)[:200])
     # ---- stage 2: dev split
     js = (0, 4, 8, 12) if fast else (0, 2, 4, 6, 8, 10, 12, 14)
     dp = out / "dev_preds.json"
     J = json.loads(dp.read_text()) if (dp.exists() and not force) else {"preds": {}}
     if J.get("js") != list(js): J = {"preds": {}}
-    want = ["B", "P"] + (["C"] if hasC else []) + (["A"] if (STD and not fast) else [])
+    want = ["B", "P"] + (["C"] if hasC else []) + (["A"] if hasA else [])
     need = [n for n in want if n not in J["preds"]]
     if need:
         items, dmeta = dev_items(pub, js); J["meta"] = dmeta; J["js"] = list(js)
         for name in need:
-            P = json.loads((out / ("C_dev" if name == "C" else name) / "params.json").read_text()); M = mod(name)
-            t = time.time(); J["preds"][name] = predict_any(name, M, items, P, workers)
-            log(f"dev pred {name} {time.time() - t:.0f}s ({len(items)} pseudo-queries)")
-            dp.write_text(json.dumps(J))
+            try:
+                P = json.loads((out / ("C_dev" if name == "C" else name) / "params.json").read_text()); M = mod(name)
+                t = time.time(); J["preds"][name] = predict_any(name, M, items, P, workers)
+                log(f"dev pred {name} {time.time() - t:.0f}s ({len(items)} pseudo-queries)")
+                dp.write_text(json.dumps(J))
+            except Exception as e:
+                if name == "B": raise
+                log(f"WARN dev pred {name} failed (dropped):", repr(e)[:300])
     dev, dmeta = J["preds"], {k: tuple(v) for k, v in J["meta"].items()}
     if tune and not fast:
-        tune_b(out, pub, dev, dmeta, workers, force, js)
-        if (out / "Bt" / "params.json").exists():
+        try:
+            tune_b(out, pub, dev, dmeta, workers, force, js)
+        except Exception as e:
+            log("WARN retune failed (no Bt):", repr(e)[:300])
+        if (out / "Bt" / "params.json").exists() and (out / "Bt" / "dev_preds.json").exists():
             dev["Bt"] = json.loads((out / "Bt" / "dev_preds.json").read_text())
             predict_splits(out, pub, "Bt", force, workers); vp["Bt"] = val_line(out, "Bt", Sc)
     cands = [m for m in ("A", "B", "Bt", "C") if m in dev]
@@ -529,7 +556,15 @@ def main():
         pub, _ = paths(kit); setup_quiet(pub)
         ok = package(kit, tag, a[a.index("--package") + 1], desk=a[a.index("--desk") + 1] if "--desk" in a else None)
         sys.exit(0 if ok else 1)
-    evaluate(kit, tag, "--force" in a, workers, "--fast" in a, "--notune" not in a, "--ablations" in a)
+    try:
+        evaluate(kit, tag, "--force" in a, workers, "--fast" in a, "--notune" not in a, "--ablations" in a)
+    except BaseException as e:
+        import traceback
+        log("RUNNER ERROR:", repr(e)[:300]); print(traceback.format_exc()[-1500:])
+        if OPT["desk"] and (DESK / "SAFE" / "submission.csv").exists() and not (DESK / "FINAL" / "submission.csv").exists():
+            shutil.copytree(DESK / "SAFE", DESK / "FINAL", dirs_exist_ok=True); log("copied SAFE -> FINAL (SAFE is valid and verified)")
+        log("SAFE on the Desktop is valid. Manual fallback: see ROUND2_RUNBOOK.md section 4 (--package B / C / P).")
+        sys.exit(2)
 
 
 if __name__ == "__main__":
