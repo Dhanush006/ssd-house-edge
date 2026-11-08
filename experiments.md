@@ -134,3 +134,27 @@ first of B, Bt, blend, C, A within 0.3e-3 dev+confirm Brier of the best.
 | main | 58.21 | 58.18 | 55.23 | 58.18 | 58.19 | 55.87 | 30.83 | 58.20 | B | 58.18 | A |
 - Pick is within 0.03 pts of the best model on every kit. "-" = retune not kept (failed dev+confirm). S8 flags: NONE_MASS .88, C_BEATS_B_ON_DEV.
 - Runtime: packaged B (final code) on main test 184 s single core under load 80+ (byte-identical, 58.177); told-nothing 153 s; full runner on main 12 min under load.
+
+## Round-2 release-window readiness (22:00-) — schema robustness, staged runner, gate
+Kit released ~1 h before the deadline -> everything pre-built; one command (`ROUND2_RUNBOOK.md`).
+- **Schema**: `src/kitschema.py` (stdlib, shipped in every entry). Payout set = `p_*` columns of sample_submission (any count/values),
+  payouts handled as indices (0 = loss, >= 2 = big), unknown history values -> nearest payout; missing signal -> 0, any numeric signal;
+  missing machine_type -> `_pool`; unknown test types -> pooled tables/mu in B (`_pool`), all-zero type in C, pooled freq in P.
+  fit_b: types with >= 30 validation targets get own tables/mu, rest + unknown -> `_pool`; no validation targets -> tables from histories
+  (split by previous big payout, then EM) and mu from observed win rates. Main kit unchanged: **B 58.177, C 55.869** (same as before).
+- **P** (`src/model_p.py`): pooled fallback, own EW counts shrunk to type frequencies, (hl, k) by validation grid: main 30.85 (starter 30.83).
+  Bundled in every entry: queries the main model cannot score (exception / bad row) get P; tested with a deliberately broken B params -> valid CSV.
+- **Runner** staged: P packaged + verified -> Desktop SAFE (6 s); B fitted, packaged -> SAFE; C/C_dev fit in background; dev split; blend; gate; pick -> FINAL.
+  Packaging runs fresh-folder py3.13 -I test (2 workers), 1-worker rerun (must be byte-identical), validation in parallel; own validator mirrors
+  checker rules (header set, every query once, finite, [0,1], sum 1e-6); kit checker soft; own zip fallback. `--fast` = no retune/A, 4 dev offsets.
+- **Schema-change kits** (`src/synth_kit.py X1..X3`, all end-to-end, every package byte-identical + VALID; kit checker rejects them by design):
+| kit | change | P | B | C | blend | pick (val) | wall (3 kits in parallel, load 15-30) |
+|---|---|---|---|---|---|---|---|
+| X1 | payouts 0/1/3/10/50, 10 machines/ep, signal {0,1,2}, 4 types + test-only "mystery" | 21.52 | 37.44 | 36.15 | 37.44 (B 1.0) | B 37.44 | SAFE-P 6 s, SAFE-B 369 s, FINAL 545 s |
+| X2 | payouts 0/2/4/8, 6 machines/ep, renamed types, no signal column, cutoffs 300-480 | 21.42 | 37.05 | 36.09 | 36.87 | B 37.05 | 6 s / 341 s / 502 s |
+| X3 | main schema, no targets/reference/metadata | - | (no val) | - | - | blend B.8/C.2 | 3 s / 356 s / 560 s |
+- **Main fast rehearsal** (machine idle, 6 workers): SAFE-P 6 s, SAFE-B 99 s (package 46 s, test runtime 27 s on 2 workers), C fit 124 s (background),
+  FINAL (= B, 58.177) at **186 s**.
+- Gate (B vs C per query, w = sigmoid(theta . [top posterior, none posterior, evidence gap, log hist, |B-C|]), fit on dev only;
+  eligible only if it also wins on confirm): main dev 367.42 vs B 367.50 but confirm 357.86 vs 357.44 -> not eligible; X1/X2/X3 same pattern
+  (X2 dev -2.0, confirm +2.4 vs B) -> gate overfits the dev part; kept as guarded candidate only.
