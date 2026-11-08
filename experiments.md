@@ -183,3 +183,34 @@ Kit released ~1 h before the deadline -> everything pre-built; one command (`ROU
 - Short/long-history split blend weights (`src/shortblend.py`, dev-chosen, confirm Brier x1e3): main B 357.44 vs split 358.47 (w_short .6);
   S1 374.70 vs 374.94; S2 386.30 vs 387.06; S3 372.57 vs 371.78 (global blend 371.80); S4 equal. -> no short-history gain from mixing; dropped.
   Gate summary: never eligible (dev gain, confirm loss on main, S1, X1-X3); now opt-in (`--gate`), confirm-guarded.
+
+### Evidence half-life for B (23:10) + suite v3 (fast mode, final code)
+- S11 (rule switch) exposed B committing to the pre-switch pair: B 24.24 vs C 34.25 (picker chose C). New optional `evhl`: screening windows and
+  filter evidence down-weighted by 0.5^(age/evhl). Validation: S11 evhl 40 **34.76**, 80 29.59; main evhl 40 58.104, 80 58.152 (B 58.177).
+  Runner `ev_tune`: candidates (40, 80) fast / (25, 40, 80) full, one B dev pass each (20-70 s), kept only if dev AND confirm improve.
+  S11: dev 473.9 -> 393.8, confirm 480.3 -> 389.1 -> KEEP -> FINAL blend B.7/C.3 = **35.18** (was 34.25). Rejected on main and all other kits.
+- Neighbor term made opt-in (`--nb`): the confirm guard let through false positives on kits without neighbor effects
+  (S1 kept lag 4: 37.408 -> 37.406; S4 lag 8: 36.87 -> 36.89; S6 lag 6: 37.54 -> 37.48) while main's real effect is <= +0.04 and failed confirm.
+  (S1/S4/S6 rows below include those kept terms.)
+| kit | P | B | C | blend | pick | pick val | best | gap |
+|---|---|---|---|---|---|---|---|---|
+| S1 new XOR pairs | 21.76 | 37.41 | 36.13 | 37.34 | B | 37.41 | B | 0 |
+| S1b partial overlap, tied k | 21.53 | 37.90 | 37.19 | 37.94 | blend | 37.94 | blend | 0 |
+| S1c 4 new pairs, k = 2nd lag | 21.10 | 37.74 | 36.56 | 37.76 | B | 37.74 | blend | -0.02 |
+| S2 and/or | 24.54 | 36.69 | 33.23 | 36.69 | B | 36.69 | B | 0 |
+| S3 lag/count | 23.87 | 35.04 | 33.62 | 35.01 | blend | 35.01 | B | -0.03 |
+| S4 3-parity | 21.17 | 36.89 | 22.28 | 36.89 | B | 36.89 | B | 0 |
+| S5 cross-machine | 21.85 | 36.96 | 27.72 | 36.96 | B | 36.96 | B | 0 |
+| S6 3 size states | 21.26 | 37.48 | 36.85 | 37.53 | blend | 37.53 | blend | 0 |
+| S7 signal | 22.45 | 38.14 | 37.01 | 38.05 | blend | 38.05 | B | -0.09 |
+| S8 no structure | 33.44 | 32.04 | 34.47 | 34.47 | blend (C 1.0) | 34.47 | C | 0 |
+| S9 half structureless | 21.32 | 34.16 | 31.07 | 34.16 | B | 34.16 | B | 0 |
+| S10 cross + 3-parity | 21.53 | 36.73 | 24.72 | 36.73 | B | 36.73 | B | 0 |
+| S11 rule switch | 21.31 | 34.76 (evhl 40) | 34.25 | 35.18 | blend | 35.18 | blend | 0 |
+| X1 schema | 21.52 | 37.44 | 36.15 | 37.44 | B | 37.44 | B | 0 |
+| X2 schema | 21.42 | 37.05 | 36.09 | 36.87 | B | 37.05 | B | 0 |
+| main | 30.85 | 58.18 | 55.87 | 58.20 | B | 58.18 | blend | -0.02 |
+  Pick within 0.09 of the best model on every kit (fast mode: no Bt/A).
+- **Clean timed rehearsal** (main kit, idle machine, `--fast --force`, 6 workers): SAFE-P **3 s**, SAFE-B **95 s** (B fit 31 s, val+test pred 13 s,
+  package 48 s incl. 26 s entry runtime on 2 workers), C fit 126 s in background, dev preds 33 s, evhl 47 s, FINAL (B) **259 s**.
+  FINAL sha256 37ec7212... identical to the independent 22:06 run (determinism across runs).
