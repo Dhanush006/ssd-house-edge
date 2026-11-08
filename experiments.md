@@ -216,3 +216,23 @@ Kit released ~1 h before the deadline -> everything pre-built; one command (`ROU
   FINAL sha256 37ec7212... identical to the independent 22:06 run (determinism across runs).
 - SAFE upgrade rule: once C is predicted, if C's validation points exceed B's by > 1, C is packaged and becomes SAFE (10 s).
   Clean forced S11 run: SAFE-P 3 s, SAFE-B 176 s (B 24.24), **SAFE-C 194 s** (34.25), evhl kept, FINAL blend B.7/C.3 **35.18** at 497 s.
+
+### Per-machine online mixer of B and C (Fixed-Share style) - negative result (Nov 8, 3 AM)
+- Idea (from the retrospective research): weight B vs C per query by their Brier loss on the machine's own last M observed
+  spins (episode re-forecast at c-k, k = 1..M), w_B = w0 e^{-eta L_B} / (w0 e^{-eta L_B} + (1-w0) e^{-eta L_C}); eta = 0 is the global blend.
+- Offline check `src/mix_offline.py` (M = 8; per-machine or episode-pooled losses; gamma 1 / 0.8; eta 0.5-16), scored on
+  validation true probabilities and **tuned on validation itself** (optimistic upper bound):
+
+| kit | best global blend | best mixer | gain |
+|---|---|---|---|
+| main | 58.201 | 58.201 | 0.000 |
+| S1 new pairs | 37.406 | 37.386 | -0.020 |
+| S8 no structure | 34.468 | 34.449 | -0.019 |
+| S9 half structureless | 34.159 | 34.090 | -0.069 |
+| S10 cross + 3-parity | 36.735 | 36.734 | -0.001 |
+| S11 rule switch | 35.181 | 35.194 | +0.014 |
+
+- Why: one observed spin's Brier loss has a spread far larger than the B-C gap in expected loss, so 8 spins (64 when pooled over
+  an episode) cannot tell which model is right for a machine. More spins would multiply the entry runtime by M.
+- Decision: not added to the runner. The global dev/confirm blend already captures what is learnable. Runtime was fine
+  (B 53 s, C 23 s for 9x the main validation queries), so cost was not the reason.
