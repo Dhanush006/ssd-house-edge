@@ -16,3 +16,5 @@ __pycache__/
 C?AUDE.md
 .c?aude/
 _synth/
+kit2/
+_r2kit*.log

@@ -236,3 +236,9 @@ Kit released ~1 h before the deadline -> everything pre-built; one command (`ROU
   an episode) cannot tell which model is right for a machine. More spins would multiply the entry runtime by M.
 - Decision: not added to the runner. The global dev/confirm blend already captures what is learnable. Runtime was fine
   (B 53 s, C 23 s for 9x the main validation queries), so cost was not the reason.
+
+## Round 2 (adaptation) - release day, Nov 8
+- Kit released 10:30; `round2_run.py kit2 --tag R2 --fast`: SAFE-P at 3 s, SAFE-B at 92 s, FINAL = B at 172 s, flags none.
+- Change found by B: new XOR lag pairs (3,8), (1,4), (2,6), each about 1/3 of machines; size lag = first lag of the pair; same size tables.
+- Validation (out of 20): B **19.436** (R 0.0290), C 18.635, P 10.225, starter 10.221. Fresh 3.13 rerun from the zip byte-identical.
+- Full mode (background, 749 s): Bt 19.442, B 19.436, **A (main-round model) 10.047**. Picker kept B (Bt within tolerance). Submitted B.
