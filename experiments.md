@@ -214,3 +214,5 @@ Kit released ~1 h before the deadline -> everything pre-built; one command (`ROU
 - **Clean timed rehearsal** (main kit, idle machine, `--fast --force`, 6 workers): SAFE-P **3 s**, SAFE-B **95 s** (B fit 31 s, val+test pred 13 s,
   package 48 s incl. 26 s entry runtime on 2 workers), C fit 126 s in background, dev preds 33 s, evhl 47 s, FINAL (B) **259 s**.
   FINAL sha256 37ec7212... identical to the independent 22:06 run (determinism across runs).
+- SAFE upgrade rule: once C is predicted, if C's validation points exceed B's by > 1, C is packaged and becomes SAFE (10 s).
+  Clean forced S11 run: SAFE-P 3 s, SAFE-B 176 s (B 24.24), **SAFE-C 194 s** (34.25), evhl kept, FINAL blend B.7/C.3 **35.18** at 497 s.

@@ -225,6 +225,12 @@ def evaluate(kit, tag, force, workers, fast=False, tune=True, ablations=False):
             predict_splits(out, pub, "C", force, workers); vp["C"] = val_line(out, "C", Sc)
         except Exception as e:
             log("WARN model C prediction failed (C dropped):", repr(e)[:300]); hasC = False
+        if hasC and vp.get("C", 0) > vp.get("B", 0) + 1.0:  # B badly misspecified: make C the safe upload now
+            log(f"C beats B on validation by {vp['C'] - vp['B']:.2f} points -> SAFE = C")
+            try:
+                package(kit, tag, "C", desk="SAFE")
+            except Exception as e:
+                log("WARN package C failed:", repr(e)[:200])
     hasA = False
     if STD and not fast:
         try:

@@ -29,12 +29,13 @@ Everything below is rehearsed. Do not change code during the window.
 | `schema: ...` / `schema test: ...` | what the kit contains (payout columns, machines per episode, cutoffs, types) | 1 s |
 | `DESKTOP SAFE <- P` | pooled fallback entry is valid and on the Desktop | 3 s (6 s loaded) |
 | `DESKTOP SAFE <- B` | structured model B is valid and on the Desktop (replaces P) | 95 s idle; 3-6 min if the laptop is busy |
+| `DESKTOP SAFE <- C` | only if C beats B on validation by > 1 point (B misspecified): SAFE becomes C | ~2-3 min |
 | `DESKTOP FINAL <- <model>` | the picked entry is valid and on the Desktop | 4.3 min idle; up to 9-10 min busy |
 | `DONE` | finished | same as FINAL |
 
 Rehearsed on the main kit (idle laptop, 6 workers): P 3 s, B 95 s, FINAL 259 s; packaged entry runtime 26 s on 2 workers (limit 30 min).
 
-4. Upload as soon as `DESKTOP SAFE <- B` appears (a valid upload early is insurance; the latest Form response counts):
+4. Upload as soon as `DESKTOP SAFE <- B` appears (re-upload SAFE if `DESKTOP SAFE <- C` follows) (a valid upload early is insurance; the latest Form response counts):
    - CSV: `~/Desktop/SSD-HouseEdge-R2/SAFE/submission.csv`
    - ZIP: `~/Desktop/SSD-HouseEdge-R2/SAFE/entry.zip`
 5. When `DONE` appears, upload again from `~/Desktop/SSD-HouseEdge-R2/FINAL/` (if it differs from SAFE: compare `INFO.txt`).
