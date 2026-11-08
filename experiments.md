@@ -118,3 +118,19 @@ Changes to B (all fitted per kit, nothing hard-coded):
 C: + per-pair cell win-rate deviations (any 2-lag boolean rule), cross-machine agreement, count windows (main 55.87 vs 55.91).
 Runner: diagnostics block (rule-family mass, top hypotheses, size K / mixture misfit, per-condition ratios), flags, conservative PICK =
 first of B, Bt, blend, C, A within 0.3e-3 dev+confirm Brier of the best.
+- Bt search now also tries two fixed fast-drift settings (qd .015/.04, wider d grid): S8 Bt 32.09 -> 34.02; on main they lose on dev (not picked).
+- Bugs found by the suite and fixed: naive prior below pmin (no candidates), single size state (A=B -> NaN). 
+**Suite v2 (final code; validation points, /40 synthetic, /60 main; pick = runner's conservative dev+confirm choice):**
+| kit | A | B0 (old family) | Bn (told nothing) | B | Bt | C | D | dev blend | pick | pick val | best |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 xor pairs | 21.50 | 37.40 | 36.28 | 37.41 | 37.38 | 36.13 | 21.61 | 37.36 | B | 37.41 | B |
+| S2 and/or | 24.69 | 30.00 | 35.86 | 36.69 | - | 33.23 | 23.88 | 36.69 | B | 36.69 | B |
+| S3 lag/count | 24.80 | 33.83 | 33.61 | 35.04 | - | 33.62 | 23.43 | 35.09 | blend B.7/C.3 | 35.09 | blend |
+| S4 3-parity | 21.01 | 21.79 | 36.49 | 36.87 | 36.88 | 22.28 | 21.12 | 36.88 | B | 36.87 | Bt |
+| S5 cross-machine | 21.20 | 22.46 | 35.83 | 36.96 | - | 27.72 | 21.72 | 36.96 | B | 36.96 | B |
+| S6 3 size states | 36.20 | 37.39 | 36.62 | 37.54 | - | 36.85 | 21.20 | 37.57 | blend B.8/C.2 | 37.57 | blend |
+| S7 signal | 36.89 | 38.14 | 36.85 | 38.14 | 38.15 | 37.01 | 22.41 | 38.12 | blend Bt.8/C.2 | 38.12 | Bt |
+| S8 no structure | 28.88 | 31.27 | 31.26 | 32.09 | 34.02 | 34.47 | 31.03 | 34.50 | blend Bt.2/C.8 | 34.50 | blend |
+| main | 58.21 | 58.18 | 55.23 | 58.18 | 58.19 | 55.87 | 30.83 | 58.20 | B | 58.18 | A |
+- Pick is within 0.03 pts of the best model on every kit. "-" = retune not kept (failed dev+confirm). S8 flags: NONE_MASS .88, C_BEATS_B_ON_DEV.
+- Runtime: packaged B (final code) on main test 184 s single core under load 80+ (byte-identical, 58.177); told-nothing 153 s; full runner on main 12 min under load.

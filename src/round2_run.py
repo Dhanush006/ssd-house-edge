@@ -258,6 +258,11 @@ def tune_b(out, pub, dev, dmeta, workers, force, ndraw=int(os.environ.get("R2_ND
         pr = pool_predict(M, items, P, workers); m, _ = dev_brier(pr, dmeta, "dev")
         log(f"tune {i}: qb={P['qb']} jump={P['jump']} qd={P['qd']} etau={P['etau']} dev={1e3 * m:.2f} (B {1e3 * b_dev:.2f})")
         if best is None or m < best[0]: best = (m, P, pr)
+    for qd in (0.015, 0.04):  # fixed fast-drift candidates (pure drifting win rates)
+        P = dict(base); P["qd"] = qd; P["dmax"] = max(base["dmax"], 3.0); P["nd"] = max(base["nd"], 13)
+        pr = pool_predict(M, items, P, workers); m, _ = dev_brier(pr, dmeta, "dev")
+        log(f"tune fast-drift qd={qd}: dev={1e3 * m:.2f} (B {1e3 * b_dev:.2f})")
+        if m < best[0]: best = (m, P, pr)
     gr = base.get("gam_raw", 0.0)
     if abs(gr) > 0.1:  # signal term: candidate only, kept if dev says so
         P = dict(base); P["gam"] = gr
