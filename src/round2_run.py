@@ -88,11 +88,7 @@ def setup_schema(pub):
 
 
 # ---------------- items / dev split ----------------
-def read_items(name, d):
-    if name == "A":
-        M = mod("A"); qs, H = M.read_split(d)
-        return [(q["query_id"], q["episode_id"], H[q["machine_id"]], int(q["cutoff"]), q["machine_type"], int(q["signal"]))
-                for q in sorted(qs, key=lambda r: r["query_id"])]
+def read_items(name, d):  # payout indices for every model (A converts back to raw values in predict_any)
     qs, H = KS.read_split(d, VALS)
     return [(q["query_id"], q["episode_id"], H[q["machine_id"]], int(q["cutoff"]), q["machine_type"], q["signal"])
             for q in sorted(qs, key=lambda r: r["query_id"])]
