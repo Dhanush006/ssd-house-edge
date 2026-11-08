@@ -278,7 +278,9 @@ class WinFilter:
         A, Bs = self.SS[mtype]
         sz_hyps, sz_ll = size_ll(s, ticks, self.SS[mtype], P["epss"], P.get("nsz", 9))
         kept, tcs = self.candidates(s, ticks, mtype, sz_hyps, sz_ll, ctx)
-        lev = []; preds = []; recs = []
+        gap = min(kept[0][0] - kept[1][0], 20.0) if len(kept) > 1 else 20.0
+        self.gf = [0.0, 0.0, gap / 10.0, math.log1p(len(ticks)) / 6.0]
+        lev = []; preds = []; recs = []; hs_ = []
         L = P.get("eL", 0)
         for sc, h, sp in kept:
             post = list(self.prior); last = None; le = 0.0; rec = {}
@@ -314,7 +316,7 @@ class WinFilter:
             e0 = math.fsum(u * w for u, w in zip(post, s0)); e1 = math.fsum(u * w for u, w in zip(post, s1))
             w0 = (1 - pzc) * e0; w1 = pzc * e1
             preds.append([1 - w0 - w1] + [w0 * A[i] + w1 * Bs[i] for i in range(len(A))])
-            lev.append(P["evt"] * le + math.log(self.hprior[h])); recs.append(rec)
+            lev.append(P["evt"] * le + math.log(self.hprior[h])); recs.append(rec); hs_.append(h)
         if not preds:
             sp = SizePost(s, sz_hyps, sz_ll, self.kprior[("fallback",)], len(P["epss"]))
             pzc = sp.pz(c)
@@ -323,6 +325,7 @@ class WinFilter:
             return [1 - w0 - w1] + [w0 * A[i] + w1 * Bs[i] for i in range(len(A))], []
         mx = max(lev)
         wts = [math.exp(v - mx) for v in lev]; Z = math.fsum(wts)
+        self.gf[0] = max(wts) / Z; self.gf[1] = math.fsum(w for w, h in zip(wts, hs_) if h[0] == "none") / Z
         common = sorted(set.intersection(*[set(r) for r in recs]))
         rec = [(t, math.fsum(w * r[t] for w, r in zip(wts, recs)) / Z, 1 if s[t] > 0 else 0) for t in common]
         return [math.fsum(w * p[j] for w, p in zip(wts, preds)) / Z for j in range(len(preds[0]))], rec
@@ -354,12 +357,13 @@ def finalize(p, e, P):
 def _work(args):
     P, items = args
     F = WinFilter(P)
-    raw = []
+    raw = []; gfs = {}
     ctxs = episode_ctx(items)
     for qid, ep, s, c, mt, sg in items:
         ticks = sorted(t for t in s if t < c)
         p, rec = F.machine(s, c, mt, ticks, sg, ctxs[qid])
         raw.append((qid, ep, c, p, rec))
+        if P.get("gatefeat"): gfs[qid] = list(F.gf)
     by_ep = defaultdict(list)
     for qid, ep, c, p, rec in raw:
         by_ep[ep].append(rec)
@@ -369,7 +373,7 @@ def _work(args):
         if P.get("eL", 0):
             others = [r for r in by_ep[ep] if r is not rec]
             e = episode_offset(others, c, P)
-        out.append((qid, finalize(p, e, P)))
+        out.append((qid, finalize(p, e, P)) if not P.get("gatefeat") else (qid, (finalize(p, e, P), gfs[qid])))
     return out
 
 
