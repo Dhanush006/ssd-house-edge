@@ -12,6 +12,7 @@ Weights are fitted offline (src/fit_c.py) on per-tick examples from organizer hi
 import csv, math
 from collections import defaultdict
 from pathlib import Path
+import kitschema as KS_
 
 PAY = (0, 1, 2, 5, 20)
 TYPES = ("steady", "balanced", "jackpot")
@@ -23,13 +24,8 @@ CNTK = (3, 5, 8)
 HL_F = 10.0
 
 
-def read_split(d):
-    d = Path(d)
-    qs = list(csv.DictReader(open(d / "queries.csv", newline="", encoding="utf-8")))
-    H = defaultdict(dict)
-    for r in csv.DictReader(open(d / "history.csv", newline="", encoding="utf-8")):
-        H[r["machine_id"]][int(r["tick"])] = int(r["payout"])
-    return qs, H
+def read_split(d, vals=None):
+    return KS_.read_split(d, vals)  # payouts as indices: 0 = loss, >= 2 = big
 
 
 def lg(p):
@@ -79,7 +75,7 @@ def machine_feats(s, mtype, sigv, targets, epwin, ctx=None):
         def cnx(tt, n):
             v = [s.get(tt - j) for j in range(1, n + 1)]
             return 0.0 if None in v else (2.0 * sum(u > 0 for u in v) - n) / n
-    oh = [1.0 if mtype == t else 0.0 for t in TYPES]
+    oh = [1.0 if mtype == t else 0.0 for t in TYPES]  # unknown type -> all zeros (pooled)
     for tq in targets:
         while i < len(ticks) and ticks[i] < tq:
             t = ticks[i]; y = s[t]; w = 1.0 if y > 0 else -1.0
@@ -175,10 +171,10 @@ def tree_val(n, f):
     return n
 
 
-def gbm_pred(T, f):
-    z = [0.0] * 5
+def gbm_pred(T, f, nc=5):
+    z = [0.0] * nc
     for i, tr in enumerate(T):
-        z[i % 5] += tree_val(tr, f)
+        z[i % nc] += tree_val(tr, f)
     m = max(z); e = [math.exp(v - m) for v in z]; Z = math.fsum(e)
     return [v / Z for v in e]
 
@@ -186,8 +182,9 @@ def gbm_pred(T, f):
 def predict_items(items, P):
     """items: (qid, episode, history{t:payout}, cutoff, type, signal); histories may include ticks >= cutoff."""
     global HL_R, HL_F
-    global FEAT2
+    global FEAT2, TYPES
     HL_R = P.get("hlr", 40.0); HL_F = P.get("hlf", 10.0); FEAT2 = P.get("feat2", False)
+    TYPES = tuple(P.get("types", ("steady", "balanced", "jackpot")))
     by_ep = defaultdict(list)
     for it in items:
         by_ep[it[1]].append(it)
@@ -200,7 +197,7 @@ def predict_items(items, P):
         for n, (qid, _, _, c, mt, sg) in enumerate(qq):
             (_, f), = machine_feats(Hs[qid], mt, sg, [c], lambda t, q=qid: es(q, t), (hl, n))
             if "gbm" in P:
-                p = gbm_pred(P["gbm"], f)
+                p = gbm_pred(P["gbm"], f, P.get("nclass", 5))
             else:
                 f = [(a - mu) / s_ for a, mu, s_ in zip(f, P["mean"], P["sd"])]
                 p = softmax_pred(P["W"], f)
@@ -210,7 +207,7 @@ def predict_items(items, P):
 
 
 def predict_split(d, P, workers=1):
-    qs, H = read_split(d)
-    items = [(q["query_id"], q["episode_id"], H[q["machine_id"]], int(q["cutoff"]), q["machine_type"], int(q["signal"]))
+    qs, H = read_split(d, P.get("payvals"))
+    items = [(q["query_id"], q["episode_id"], H[q["machine_id"]], int(q["cutoff"]), q["machine_type"], q["signal"])
              for q in qs]
     return predict_items(items, P)

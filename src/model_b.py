@@ -18,19 +18,24 @@ episode at ticks < cutoff. No condition labels.
 import csv, math
 from collections import defaultdict
 from pathlib import Path
+import kitschema as KS_
 
-PAY = (0, 1, 2, 5, 20)
+PAY = (0, 1, 2, 5, 20)  # default only; histories are payout *indices* (0 = loss, >= 2 = big), see kitschema
 KS = tuple(range(9))  # 0 = constant state
 SZ = [(k,) for k in range(9)] + [(a, b) for a in range(1, 9) for b in range(a + 1, 9)]  # size-state drivers
 
 
-def read_split(d):
-    d = Path(d)
-    qs = list(csv.DictReader(open(d / "queries.csv", newline="", encoding="utf-8")))
-    H = defaultdict(dict)
-    for r in csv.DictReader(open(d / "history.csv", newline="", encoding="utf-8")):
-        H[r["machine_id"]][int(r["tick"])] = int(r["payout"])
-    return qs, H
+def read_split(d, vals=None):
+    return KS_.read_split(d, vals)
+
+
+def rtype(P, mtype):
+    """Machine type known to the fitted params, else the pooled fallback."""
+    if mtype in P["mu"] and mtype in P["size_states"]:
+        return mtype
+    if "_pool" in P["mu"] and "_pool" in P["size_states"]:
+        return "_pool"
+    return sorted(k for k in P["mu"] if k in P["size_states"])[0]
 
 
 def sig(x):
@@ -155,7 +160,7 @@ def size_ll(s, ticks, tabs, epss, nsz=9):
         v = s[t]
         if v == 0:
             continue
-        i = PAY.index(v) - 1; ai = A[i]; bi = B[i]
+        i = v - 1; ai = A[i]; bi = B[i]
         f = [fz(s, t, sz) for sz in SZn]
         for h, (j, ze, ep) in enumerate(hyps):
             g = f[j] if ze == 0 else 1.0 - f[j]
@@ -266,6 +271,10 @@ class WinFilter:
 
     def machine(self, s, c, mtype, ticks, sigv=0, ctx=None):
         P = self.P
+        mtype = rtype(P, mtype)
+        mh = P.get("maxhist", 0)
+        if mh and len(ticks) > mh:  # runtime guard for very long histories: keep the most recent ticks
+            ticks = ticks[-mh:]
         A, Bs = self.SS[mtype]
         sz_hyps, sz_ll = size_ll(s, ticks, self.SS[mtype], P["epss"], P.get("nsz", 9))
         kept, tcs = self.candidates(s, ticks, mtype, sz_hyps, sz_ll, ctx)
@@ -288,7 +297,7 @@ class WinFilter:
                 if y == 0:
                     lik = [qz * (1 - u) + pz * (1 - w) for u, w in zip(s0, s1)]
                 else:
-                    k = PAY.index(y) - 1; ak = qz * A[k]; bk = pz * Bs[k]
+                    k = y - 1; ak = qz * A[k]; bk = pz * Bs[k]
                     lik = [ak * u + bk * w for u, w in zip(s0, s1)]
                 post = [u * w for u, w in zip(post, lik)]
                 z = math.fsum(post)
@@ -304,19 +313,19 @@ class WinFilter:
             pzc = sp.pz(c)
             e0 = math.fsum(u * w for u, w in zip(post, s0)); e1 = math.fsum(u * w for u, w in zip(post, s1))
             w0 = (1 - pzc) * e0; w1 = pzc * e1
-            preds.append([1 - w0 - w1] + [w0 * A[i] + w1 * Bs[i] for i in range(4)])
+            preds.append([1 - w0 - w1] + [w0 * A[i] + w1 * Bs[i] for i in range(len(A))])
             lev.append(P["evt"] * le + math.log(self.hprior[h])); recs.append(rec)
         if not preds:
             sp = SizePost(s, sz_hyps, sz_ll, self.kprior[("fallback",)], len(P["epss"]))
             pzc = sp.pz(c)
             mu = P["mu"][mtype] + P.get("gam", 0.0) * sigv; e0 = sig(mu); e1 = sig(mu + P["delta"])
             w0 = (1 - pzc) * e0; w1 = pzc * e1
-            return [1 - w0 - w1] + [w0 * A[i] + w1 * Bs[i] for i in range(4)], []
+            return [1 - w0 - w1] + [w0 * A[i] + w1 * Bs[i] for i in range(len(A))], []
         mx = max(lev)
         wts = [math.exp(v - mx) for v in lev]; Z = math.fsum(wts)
         common = sorted(set.intersection(*[set(r) for r in recs]))
         rec = [(t, math.fsum(w * r[t] for w, r in zip(wts, recs)) / Z, 1 if s[t] > 0 else 0) for t in common]
-        return [math.fsum(w * p[j] for w, p in zip(wts, preds)) / Z for j in range(5)], rec
+        return [math.fsum(w * p[j] for w, p in zip(wts, preds)) / Z for j in range(len(preds[0]))], rec
 
 
 def episode_offset(recs, c, P):
@@ -378,8 +387,8 @@ def episode_ctx(items):
 
 
 def predict_split(d, P, workers=1):
-    qs, H = read_split(d)
-    items = [(q["query_id"], q["episode_id"], H[q["machine_id"]], int(q["cutoff"]), q["machine_type"], int(q["signal"]))
+    qs, H = read_split(d, P.get("payvals"))
+    items = [(q["query_id"], q["episode_id"], H[q["machine_id"]], int(q["cutoff"]), q["machine_type"], q["signal"])
              for q in sorted(qs, key=lambda r: r["query_id"])]
     if workers > 1:
         import multiprocessing as mp

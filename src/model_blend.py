@@ -13,11 +13,11 @@ def predict_split(d, P, workers=1):
     acc = None; tot = math.fsum(w for _, _, w in P["parts"])
     for mod, pf, w in P["parts"]:
         M = importlib.import_module(mod)
-        pr = M.predict_split(d, json.loads((HERE / pf).read_text()))
+        pr = M.predict_split(d, json.loads((HERE / pf).read_text()), workers)
         if acc is None:
-            acc = {q: [0.0] * 5 for q in pr}
+            acc = {q: [0.0] * len(p) for q, p in pr.items()}
         for q, p in pr.items():
             a = acc[q]
-            for j in range(5):
+            for j in range(len(a)):
                 a[j] += (w / tot) * p[j]
     return acc
