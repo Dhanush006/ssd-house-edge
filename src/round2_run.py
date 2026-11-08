@@ -37,9 +37,11 @@ def paths(kit):
     kit = Path(kit).resolve()
     pub = kit / "public" if (kit / "public" / "test" / "queries.csv").exists() else kit
     if not (pub / "test" / "queries.csv").exists():  # nested unzip folders: find the shallowest */test/queries.csv
-        hits = sorted((p for p in kit.rglob("queries.csv") if p.parent.name == "test"), key=lambda p: (len(p.parts), str(p)))
+        hits = sorted((p for p in kit.rglob("queries.csv") if p.parent.name == "test"),
+                      key=lambda p: ("adaptation" not in str(p).lower(), "main" in str(p).lower(), len(p.parts), str(p)))
         if hits: pub = hits[0].parent.parent
-    kd = pub.parent if (pub.parent / "check_submission.py").exists() else HE / "kit"
+        if len(hits) > 1: print(f"[r2] NOTE several kits under {kit}; using {pub} (pass that public/ folder explicitly to be sure)", flush=True)
+    kd = next((d for d in (pub.parent, pub.parent.parent, pub.parent.parent.parent) if (d / "check_submission.py").exists()), HE / "kit")
     return pub, kd
 
 

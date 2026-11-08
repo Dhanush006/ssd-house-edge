@@ -11,12 +11,16 @@ Everything below is rehearsed. Do not change code during the window.
 5. Open the Google Form for round 2 in the browser. Choose the team in the list.
 
 ## 1. At the release (T = 0)
-1. Download the round-2 kit. Unzip it into a NEW folder: `house-edge/_r2kit/` (it must contain `public/` or be the `public/` folder itself).
+1. Download the round-2 kit. Unzip it into a NEW folder: `house-edge/_r2kit/`.
+   Find the adaptation data folder: `ls _r2kit/*/season/adaptation/public _r2kit/season/adaptation/public 2>/dev/null`
+   (it holds `metadata.json`, `train/`, `validation/`, `test/`). Call it KIT below.
+   If you only give `_r2kit`, the runner searches for it and prefers `.../adaptation/public` (it prints a NOTE when it finds several).
 2. Run ONE command:
 
 ```sh
-.venv/bin/python src/round2_run.py _r2kit --tag R2 --fast | tee _r2kit.log
+.venv/bin/python src/round2_run.py KIT --tag R2 --fast | tee _r2kit.log
 ```
+   Check the first lines: `kit=.../adaptation/public` and `metadata round=adaptation`. If it says `round=main`, stop (Ctrl-C) and pass the right folder.
 
 3. Watch the log. Each line has the clock time and the seconds since start. The important lines:
 
@@ -37,7 +41,7 @@ Everything below is rehearsed. Do not change code during the window.
 Run the full mode (reuses the fitted models; adds the filter-rate retune Bt and more dev pseudo-queries; about 10-15 min):
 
 ```sh
-.venv/bin/python src/round2_run.py _r2kit --tag R2 | tee _r2kit_full.log
+.venv/bin/python src/round2_run.py KIT --tag R2 | tee _r2kit_full.log
 ```
 
 Upload from `FINAL/` again only if it finishes with `DONE` at least 5 minutes before the deadline. If not, keep the fast upload.
@@ -70,9 +74,9 @@ Information lines in stage 2 (no action needed; each change is kept only if the 
 Each step is independent and uses the cached fits in `runs/R2-R2/`:
 
 ```sh
-.venv/bin/python src/round2_run.py _r2kit --tag R2 --package B --desk FINAL      # structured model
-.venv/bin/python src/round2_run.py _r2kit --tag R2 --package C --desk FINAL      # trees
-.venv/bin/python src/round2_run.py _r2kit --tag R2 --package P --desk FINAL      # pooled fallback (always works)
+.venv/bin/python src/round2_run.py KIT --tag R2 --package B --desk FINAL      # structured model
+.venv/bin/python src/round2_run.py KIT --tag R2 --package C --desk FINAL      # trees
+.venv/bin/python src/round2_run.py KIT --tag R2 --package P --desk FINAL      # pooled fallback (always works)
 ```
 
 Order of preference if the runner fails: B > C > P. Package `blend` or `gate` only if the runner printed them as PICK.
