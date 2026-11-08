@@ -95,3 +95,26 @@ Goal: be ready for the adaptation kit (changed temporal patterns). All numbers =
 - **Runner** `src/round2_run.py <kit> --tag <t>` (~4 min main kit, 6 procs; restartable, cached per step): fits B/Bn/C/C_dev, starter, predicts val+test,
   fast + official scores, dev/confirm Brier, B retune (Bt), dev-chosen blend -> runs/R2-<t>/<model>/. `--package <A|B|Bt|C|blend>` builds entry +
   zip, fresh-folder py3.13 -I rerun byte-identical: verified B (24 s), C (3 s, 0.96 MB), blend A+B (77 s).
+
+## Round-2 robustness (17:50-) — synthetic suite + generalized B
+Suite: `src/synth_kit.py <dir> S1..S8` (main-sized kits, 4 conditions, fixed seeds; crude pooled reference, so only compare models within a kit),
+`src/suite.py <tag> S1 .. main [--from <tag>] [--table]`. Points are /40 (main /60).
+| kit | change |
+|---|---|
+| S1 | new XOR pairs (3,6),(1,8),(2,4) + untied size lag |
+| S2 | AND / OR of two lags |
+| S3 | single lag, or momentum count of wins in last 3/5/8 |
+| S4 | 3-lag parity |
+| S5 | cross-machine: partner machine's win at lag 1-4 |
+| S6 | 3 size states (sum of two size lags), size lag != win lag |
+| S7 | informative signal (win logit +0.8*signal; size state forced on signal=+1) |
+| S8 | no structure: drifting win rate, one size table |
+Changes to B (all fitted per kit, nothing hard-coded):
+- rule families: XOR pairs, single lags, none, AND/OR/A&~B/~A&B of every lag pair, win-count windows 2..8, 3-lag parity (56), cross-machine
+  (other machine at relative index r=1..7, lag 1..8) = 268 hypotheses; population prior by EM; per query windowed BB screen keeps top 4 for the filter.
+- size states: K in 2..4 chosen from validation targets (farthest-point k-means); the two extreme clusters are tables A/B, intermediate states =
+  mixtures; size-state driver = one lag k in 0..8 or the mean of two lags (28) -> 37 size hypotheses with a joint prior over (rule, size driver).
+- main kit: 58.181 (268 rules) / 58.177 (+ size generalization) vs 58.182 before; runtime single core 59 s fitted, 153 s told-nothing (machine loaded).
+C: + per-pair cell win-rate deviations (any 2-lag boolean rule), cross-machine agreement, count windows (main 55.87 vs 55.91).
+Runner: diagnostics block (rule-family mass, top hypotheses, size K / mixture misfit, per-condition ratios), flags, conservative PICK =
+first of B, Bt, blend, C, A within 0.3e-3 dev+confirm Brier of the best.

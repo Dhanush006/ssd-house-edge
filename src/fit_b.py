@@ -38,19 +38,36 @@ def load(pub, split):
 PAYK = (0, 1, 2, 5, 20)
 
 
-def two_means(Q):
-    Q = np.asarray(Q); ev = Q @ np.array([1, 2, 5, 20.0])
-    o = np.argsort(ev); n = len(Q)
-    c = np.stack([Q[o[: n // 4]].mean(0), Q[o[-n // 4:]].mean(0)])
+def kmeans(Q, K):
+    ev = Q @ np.array([1, 2, 5, 20.0])
+    cs = [Q[int(np.argmin(ev))]]  # deterministic farthest-point init (keeps rare extreme states)
+    while len(cs) < K:
+        d = np.min(((Q[:, None, :] - np.stack(cs)[None]) ** 2).sum(-1), 1); cs.append(Q[int(np.argmax(d))])
+    c = np.stack(cs)
     for _ in range(50):
         d = ((Q[:, None, :] - c[None]) ** 2).sum(-1); a = d.argmin(1)
-        c = np.stack([np.median(Q[a == j], 0) if (a == j).any() else c[j] for j in (0, 1)])
+        c = np.stack([np.median(Q[a == j], 0) if (a == j).any() else c[j] for j in range(K)])
     c = c / c.sum(1, keepdims=True)
-    if c[0] @ np.array([1, 2, 5, 20.0]) > c[1] @ np.array([1, 2, 5, 20.0]):
-        c = c[::-1]
-    d = ((Q[:, None, :] - c[None]) ** 2).sum(-1); a = d.argmin(1)
-    spread = float(np.sqrt(d.min(1)).max())
-    return c.tolist(), a, spread
+    c = c[np.argsort(c @ np.array([1, 2, 5, 20.0]))]
+    d = ((Q[:, None, :] - c[None]) ** 2).sum(-1)
+    return c, float(np.sqrt(d.min(1)).max())
+
+
+def size_tables(Q):
+    """Size states from targets: smallest K in 2..4 whose clusters fit (max dev < .02); the two extreme clusters
+    become tables A, B; every target is then represented as a mixture (1-z)A + zB (z clipped to [0,1]).
+    Returns tables, per-target z, K, and max deviation of that two-table mixture representation."""
+    Q = np.asarray(Q)
+    for K in (2, 3, 4):
+        c, sp = kmeans(Q, K)
+        if sp < 0.02: break
+    A, B = c[0], c[-1]; dv = B - A
+    if float(np.sqrt(dv @ dv)) < 0.01:  # one size state only: B = A, z = 0 (delta unidentified -> 0)
+        B = A.copy(); dv = B - A; z = np.zeros(len(Q))
+    else:
+        z = np.clip(((Q - A) @ dv) / (dv @ dv), 0, 1)
+    res = Q - (A[None] + z[:, None] * dv[None])
+    return [A.tolist(), B.tolist()], z, K, float(np.sqrt((res ** 2).sum(1)).max()), sp
 
 
 def main():
@@ -72,16 +89,16 @@ def main():
     for mt in TYPES:
         rows = [m for m in mach if m["mt"] == mt and m["tg"]]
         Q = [[p / (1 - m["tg"][0]) for p in m["tg"][1:]] for m in rows]
-        c2, a, spread = two_means(Q)
-        SS[mt] = c2; DIAG["max_dev"][mt] = round(spread, 4)
+        c2, a, K, spread, ksp = size_tables(Q)
+        SS[mt] = c2; DIAG["max_dev"][mt] = round(spread, 4); DIAG.setdefault("K", {})[mt] = K
         for m, ai in zip(rows, a):
-            zq[m["q"]["query_id"]] = int(ai)
-        print(f"fit_b tables {mt}: n={len(rows)} z1={int(a.sum())} max_dev={spread:.4f} A={[round(x, 3) for x in c2[0]]} B={[round(x, 3) for x in c2[1]]}")
+            zq[m["q"]["query_id"]] = float(ai)
+        print(f"fit_b tables {mt}: n={len(rows)} K={K} (cluster dev {ksp:.3f}) z_mean={a.mean():.2f} mix_max_dev={spread:.4f} A={[round(x, 3) for x in c2[0]]} B={[round(x, 3) for x in c2[1]]}")
     if novaltab:
         SS = em_tables(mach, SS)
     P["size_states"] = SS
     # ---- per-machine evidence
-    hyps = M.ALL_HYPS if "--base" in sys.argv else M.FULL_HYPS; nh = len(hyps); nk = len(M.KS)
+    hyps = M.ALL_HYPS if "--base" in sys.argv else M.FULL_HYPS; nh = len(hyps); nk = 9 if "--base" in sys.argv else len(M.SZ)
     # episode context (other machines of the same episode, sorted by query id) for cross-machine hypotheses
     byep = defaultdict(list)
     for i, m in enumerate(mach): byep[m["q"]["episode_id"]].append(i)
@@ -91,7 +108,7 @@ def main():
     eps = sorted(byep); chunks = [[i for e in eps[w::6] for i in byep[e]] for w in range(6)]
     import multiprocessing as mp
     with mp.get_context("spawn").Pool(6) as pool:
-        res = pool.map(_evid, [([(mach[i]["s"], mach[i]["ctx"], SS[mach[i]["mt"]]) for i in ch], hyps, P["swin"]) for ch in chunks])
+        res = pool.map(_evid, [([(mach[i]["s"], mach[i]["ctx"], SS[mach[i]["mt"]]) for i in ch], hyps, P["swin"], nk) for ch in chunks])
     BB = np.zeros((len(mach), nh)); LS = np.zeros((len(mach), nk))
     for ch, (bb, ls) in zip(chunks, res):
         BB[ch] = bb; LS[ch] = ls
@@ -105,11 +122,11 @@ def main():
     rh = r.sum(2)
     top = np.argsort(-ph)[:8]
     print("fit_b win hyps (prior): " + " ".join(f"{M.hkey(hyps[j])}:{ph[j]:.3f}" for j in top))
-    print("fit_b size k marginal: " + " ".join(f"k{k}:{pk[k]:.3f}" for k in M.KS))
+    print("fit_b size k marginal: " + " ".join(f"k{k}:{pk[k]:.3f}" for k in M.KS) + f" two-lag-sum:{pk[9:].sum():.3f}")
     for j in top[:6]:
         if ph[j] < 0.01: continue
         ck = pi[j] / ph[j]
-        print(f"fit_b   k|{M.hkey(hyps[j])}: " + " ".join(f"k{k}:{ck[k]:.2f}" for k in M.KS if ck[k] > 0.02))
+        print(f"fit_b   k|{M.hkey(hyps[j])}: " + " ".join(f"{M.SZ[k]}:{ck[k]:.2f}" for k in range(nk) if ck[k] > 0.02))
     if naive:
         P["hyps"] = [M.hkey(h) for h in hyps]; P["hprior"] = [1.0 / nh] * nh
         P["kprior"] = {"-1,-1": [1.0 / nk] * nk}
@@ -132,6 +149,7 @@ def main():
         h = hyps[int(rh[i].argmax())]; xv = M.xval(m["s"], m["c"], h, m["ctx"]) or 0.0
         X.append([1.0 * (m["mt"] == t) for t in TYPES] + [z, m["sig"]]); Y.append(M.logit(pw)); XV.append(xv)
     X = np.array(X); Y = np.array(Y); XV = np.array(XV)
+    if np.ptp(X[:, 3]) < 1e-9: X[:, 3] = 0.0  # no size-state variation: delta -> 0 via min-norm least squares
     # mixture regression: Y = type + delta z + gam sig + bmag * (sign_m * x) + d ; sign_m alternated
     sg = np.ones(len(Y)); coef = np.linalg.lstsq(X, Y, rcond=None)[0]
     for _ in range(30):
@@ -150,7 +168,7 @@ def main():
     P["bmax"] = round(max(3.5, P["bmag"] + 1.2), 3)
     res = res  # residual sd reported below
     DIAG["top_h"] = [[M.hkey(hyps[j]), round(float(ph[j]), 4)] for j in top]
-    DIAG["k_marg"] = [round(float(x), 4) for x in pk]; DIAG["none_mass"] = round(float(ph[hyps.index(("none",))]), 4)
+    DIAG["k_marg"] = [round(float(x), 4) for x in pk[:9]] + [round(float(pk[9:].sum()), 4)]; P["nsz"] = nk; DIAG["none_mass"] = round(float(ph[hyps.index(("none",))]), 4)
     DIAG["resid_sd"] = round(float(res.std()), 3); P["diag"] = DIAG
     print(f"fit_b mu={P['mu']} delta={P['delta']} gam_raw={g:.3f} bmag={P['bmag']} bsd={P['bsd']} resid_sd={res.std():.3f}")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -159,13 +177,13 @@ def main():
 
 
 def _evid(args):
-    rows, hyps, swin = args
+    rows, hyps, swin, nk = args
     bb = []; ls = []
     for s, ctx, tabs in rows:
         ticks = sorted(s); tc = M.common_ticks(s, ticks, 8)
         bb.append([M.screen_ll(s, tc, h, swin, ctx) for h in hyps])
-        szh, szl = M.size_ll(s, ticks, tabs, [0.01])
-        ls.append([M.lse([szl[n] for n, (kk, ze, ep) in enumerate(szh) if kk == k]) - math.log(2) for k in M.KS])
+        szh, szl = M.size_ll(s, ticks, tabs, [0.01], nk)
+        ls.append([M.lse([szl[n] for n, (kk, ze, ep) in enumerate(szh) if kk == k]) - math.log(2) for k in range(nk)])
     return bb, ls
 
 

@@ -21,6 +21,7 @@ from pathlib import Path
 
 PAY = (0, 1, 2, 5, 20)
 KS = tuple(range(9))  # 0 = constant state
+SZ = [(k,) for k in range(9)] + [(a, b) for a in range(1, 9) for b in range(a + 1, 9)]  # size-state drivers
 
 
 def read_split(d):
@@ -134,27 +135,32 @@ def screen_ll(s, ticks_c, h, win, ctx=None):
 
 
 # ---------------- size rule ----------------
-def size_ll(s, ticks, tabs, epss):
-    """log-lik of positive payout sizes for each (k, zeta, eps); missing lag -> z marginal 0.5."""
-    A, B = tabs
-    hyps = [(k, ze, ep) for k in KS for ze in (0, 1) for ep in epss]
+def fz(s, t, sz):
+    """Size-state driver f in [0,1]: mean of [payout >= 2] at the lags in sz (missing -> 0.5); sz=(0,) -> 0."""
+    if sz[0] == 0:
+        return 0.0
+    acc = 0.0
+    for k in sz:
+        u = s.get(t - k)
+        acc += 0.5 if u is None else (1.0 if u >= 2 else 0.0)
+    return acc / len(sz)
+
+
+def size_ll(s, ticks, tabs, epss, nsz=9):
+    """log-lik of positive payout sizes for each (size hyp j, zeta, eps); P(z=1) = ep + (1-2ep) * f_j (xor zeta)."""
+    A, B = tabs; SZn = SZ[:nsz]
+    hyps = [(j, ze, ep) for j in range(nsz) for ze in (0, 1) for ep in epss]
     ll = [0.0] * len(hyps)
-    mix = [math.log(0.5 * A[i] + 0.5 * B[i]) for i in range(4)]
     for t in ticks:
         v = s[t]
         if v == 0:
             continue
-        i = PAY.index(v) - 1
-        for h, (k, ze, ep) in enumerate(hyps):
-            if k == 0:
-                g = False
-            else:
-                u = s.get(t - k)
-                if u is None:
-                    ll[h] += mix[i]; continue
-                g = u >= 2
-            z1 = (1 - ep) if (g != ze) else ep
-            ll[h] += math.log((1 - z1) * A[i] + z1 * B[i])
+        i = PAY.index(v) - 1; ai = A[i]; bi = B[i]
+        f = [fz(s, t, sz) for sz in SZn]
+        for h, (j, ze, ep) in enumerate(hyps):
+            g = f[j] if ze == 0 else 1.0 - f[j]
+            z1 = ep + (1 - 2 * ep) * g
+            ll[h] += math.log((1 - z1) * ai + z1 * bi)
     return hyps, ll
 
 
@@ -164,28 +170,25 @@ def lse(v):
 
 
 class SizePost:
-    """Posterior over (k, zeta, eps) given a prior over k; pz(t) = P(z_t = 1)."""
+    """Posterior over size hypotheses (j, zeta, eps) given a prior over j; pz(t) = P(z_t = 1) = sum_j c0_j + a_j f_j(t)."""
     def __init__(self, s, hyps, ll, kp, nep):
         self.s = s
-        lw = [ll[i] + math.log(max(kp[k], 1e-300)) - math.log(2 * nep) for i, (k, ze, ep) in enumerate(hyps)]
+        lw = [ll[i] + math.log(max(kp[j] if j < len(kp) else 0.0, 1e-300)) - math.log(2 * nep) for i, (j, ze, ep) in enumerate(hyps)]
         self.logev = lse(lw)
         w = [math.exp(x - self.logev) for x in lw]
-        # aggregate per k: P(z=1 | g=True), P(z=1 | g=False), total weight
         agg = {}
-        for wh, (k, ze, ep) in zip(w, hyps):
-            a = agg.setdefault(k, [0.0, 0.0, 0.0])
-            a[0] += wh * ((1 - ep) if (True != ze) else ep)
-            a[1] += wh * ((1 - ep) if (False != ze) else ep)
-            a[2] += wh
-        self.agg = [(k, a[0], a[1], a[2]) for k, a in sorted(agg.items()) if a[2] > 1e-12]
+        for wh, (j, ze, ep) in zip(w, hyps):
+            a = agg.setdefault(j, [0.0, 0.0])
+            if ze == 0:
+                a[0] += wh * ep; a[1] += wh * (1 - 2 * ep)
+            else:
+                a[0] += wh * (1 - ep); a[1] -= wh * (1 - 2 * ep)
+        self.agg = [(SZ[j], a[0], a[1]) for j, a in sorted(agg.items()) if abs(a[0]) + abs(a[1]) > 1e-14]
 
     def pz(self, t):
         s = self.s; acc = 0.0
-        for k, p1, p0, wt in self.agg:
-            if k == 0:
-                acc += p0; continue
-            u = s.get(t - k)
-            acc += 0.5 * wt if u is None else (p1 if u >= 2 else p0)
+        for sz, c0, a in self.agg:
+            acc += c0 + a * fz(s, t, sz)
         return acc
 
 
@@ -264,7 +267,7 @@ class WinFilter:
     def machine(self, s, c, mtype, ticks, sigv=0, ctx=None):
         P = self.P
         A, Bs = self.SS[mtype]
-        sz_hyps, sz_ll = size_ll(s, ticks, self.SS[mtype], P["epss"])
+        sz_hyps, sz_ll = size_ll(s, ticks, self.SS[mtype], P["epss"], P.get("nsz", 9))
         kept, tcs = self.candidates(s, ticks, mtype, sz_hyps, sz_ll, ctx)
         lev = []; preds = []; recs = []
         L = P.get("eL", 0)

@@ -4,7 +4,19 @@ import sys, json, subprocess
 from pathlib import Path
 HE = Path(__file__).resolve().parents[1]; PY = sys.executable
 a = sys.argv[1:]; pre = a[0]; par = int(a[a.index("--par") + 1]) if "--par" in a else 2
-scs = [s for s in a[1:] if s.startswith("S") or s == "main"]
+scs = [s for s in a[1:] if (s.startswith("S") and len(s) <= 3) or s == "main"]
+if "--from" in a:  # reuse model-independent parts (A, C, C_dev, D, A/C dev preds) of an earlier suite run
+    import shutil
+    src = a[a.index("--from") + 1]
+    for s in scs:
+        o = HE / "runs" / f"R2-{src}-{s}"; n = HE / "runs" / f"R2-{pre}-{s}"
+        if not o.exists() or n.exists(): continue
+        n.mkdir(parents=True)
+        for d in ("A", "C", "C_dev", "D"):
+            if (o / d).exists(): shutil.copytree(o / d, n / d)
+        if (o / "dev_preds.json").exists():
+            J = json.loads((o / "dev_preds.json").read_text()); J["preds"] = {k: v for k, v in J["preds"].items() if k in ("A", "C")}
+            (n / "dev_preds.json").write_text(json.dumps(J))
 if "--table" not in a:
     procs = []
     for s in scs:

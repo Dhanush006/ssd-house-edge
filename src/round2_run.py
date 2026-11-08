@@ -153,14 +153,16 @@ def evaluate(kit, tag, force, workers, tune=True):
         log(name, pts[0].strip() if pts else o.strip()[-200:])
     # dev split blend
     dp = out / "dev_preds.json"
-    if force or not dp.exists():
-        items, dmeta = dev_items(pub); dev = {}
-        for name, pdir in (("A", "A"), ("B", "B"), ("C", "C_dev")):
-            P = json.loads((out / pdir / "params.json").read_text()); M = mod(name if name != "C" else "C")
+    J = json.loads(dp.read_text()) if (dp.exists() and not force) else {"preds": {}}
+    need = [n for n in ("A", "B", "C") if n not in J["preds"]]
+    if need:
+        items, dmeta = dev_items(pub); J["meta"] = dmeta
+        for name in need:
+            P = json.loads((out / ("C_dev" if name == "C" else name) / "params.json").read_text()); M = mod(name)
             t = time.time()
-            dev[name] = M.predict_items(items, P) if name == "C" else pool_predict(M, items, P, workers)
+            J["preds"][name] = M.predict_items(items, P) if name == "C" else pool_predict(M, items, P, workers)
             log(f"dev pred {name} {time.time() - t:.0f}s")
-        dp.write_text(json.dumps({"preds": dev, "meta": dmeta}))
+        dp.write_text(json.dumps(J))
     J = json.loads(dp.read_text()); dev, dmeta = J["preds"], {k: tuple(v) for k, v in J["meta"].items()}
     if tune:
         tune_b(out, pub, dev, dmeta, workers, force)
@@ -213,7 +215,7 @@ def evaluate(kit, tag, force, workers, tune=True):
         k = h if isinstance(h, str) else f"{h[0]},{h[1]}"
         fam[k.split(":")[0] if ":" in k else ("none" if k == "0,0" else ("lag" if k.endswith(",0") else "xor"))] += w
     fams = sorted(fam.items(), key=lambda kv: -kv[1])
-    if fams and fams[0][1] < 0.5: flags.append("NO_DOMINANT_RULE_FAMILY (B's family may not contain the rule)")
+    if fams and fams[0][1] < 0.35: flags.append("NO_DOMINANT_RULE_FAMILY (B's family may not contain the rule)")
     if th and sum(v for _, v in th[:12]) < 0.15 and fams and fams[0][0] in ("none",): flags.append("NO_SHARP_HYPOTHESES")
     if dg.get("none_mass", 0) > 0.2: flags.append(f"NONE_MASS={dg['none_mass']} (many machines look structureless)")
     if max(dg.get("max_dev", {"x": 0}).values()) > 0.02: flags.append(f"SIZE_TABLES_MISFIT max_dev={dg['max_dev']} (more than 2 size states?)")
@@ -236,7 +238,7 @@ def evaluate(kit, tag, force, workers, tune=True):
     log(f"done {time.time() - t0:.0f}s. package with: {PY} src/round2_run.py {kit} --tag {tag} --package {pick}")
 
 
-def tune_b(out, pub, dev, dmeta, workers, force, ndraw=int(os.environ.get("R2_NDRAW", "5"))):
+def tune_b(out, pub, dev, dmeta, workers, force, ndraw=int(os.environ.get("R2_NDRAW", "8"))):
     """Bounded random search of B's filter rates on the DEV split only; keep the best draw as Bt only if it
     also beats B on the untouched confirm split."""
     td = out / "Bt"
