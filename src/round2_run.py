@@ -1,6 +1,6 @@
 """Round-2 one-command runner (staged, restartable; timestamped summary lines only).
 
-  python src/round2_run.py <kit_dir> [--tag NAME] [--fast] [--force] [--workers 6] [--notune] [--ablations] [--nodesk] [--gate]
+  python src/round2_run.py <kit_dir> [--tag NAME] [--fast] [--force] [--workers 6] [--notune] [--ablations] [--nodesk] [--gate] [--nb]
     stage 0  schema report; pooled fallback P fitted + packaged + verified       -> Desktop SAFE   (~1 min)
     stage 1  B fitted (C, C_dev fit in parallel); B predicted, packaged, verified -> Desktop SAFE   (~5 min)
     stage 2  dev split (train pseudo-queries, observed outcomes): B, C, (A), retune Bt (not with --fast),
@@ -264,7 +264,7 @@ def evaluate(kit, tag, force, workers, fast=False, tune=True, ablations=False):
                 if name == "B": raise
                 log(f"WARN dev pred {name} failed (dropped):", repr(e)[:300])
     dev, dmeta = J["preds"], {k: tuple(v) for k, v in J["meta"].items()}
-    if not os.environ.get("R2_NONB"):
+    if OPT.get("nb"):  # opt-in (--nb): false positives on kits without neighbor effects (S6 -0.06), main gain <= +0.04
         try:
             if nb_tune(out, pub, dev, dmeta, js):
                 dp.write_text(json.dumps(J))
@@ -617,7 +617,7 @@ def main():
     a = sys.argv[1:]
     kit = a[0]; tag = a[a.index("--tag") + 1] if "--tag" in a else Path(kit).resolve().name
     workers = int(a[a.index("--workers") + 1]) if "--workers" in a else 6
-    OPT["desk"] = "--nodesk" not in a; OPT["gate"] = "--gate" in a
+    OPT["desk"] = "--nodesk" not in a; OPT["gate"] = "--gate" in a; OPT["nb"] = "--nb" in a
     if "--package" in a:
         pub, _ = paths(kit); setup_quiet(pub)
         ok = package(kit, tag, a[a.index("--package") + 1], desk=a[a.index("--desk") + 1] if "--desk" in a else None)
