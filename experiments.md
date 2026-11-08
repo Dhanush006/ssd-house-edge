@@ -158,3 +158,25 @@ Kit released ~1 h before the deadline -> everything pre-built; one command (`ROU
 - Gate (B vs C per query, w = sigmoid(theta . [top posterior, none posterior, evidence gap, log hist, |B-C|]), fit on dev only;
   eligible only if it also wins on confirm): main dev 367.42 vs B 367.50 but confirm 357.86 vs 357.44 -> not eligible; X1/X2/X3 same pattern
   (X2 dev -2.0, confirm +2.4 vs B) -> gate overfits the dev part; kept as guarded candidate only.
+
+### Refocus (22:37): S1-type adaptation + neighbor machines (real main data)
+- **Neighbor coupling, main data** (`src/neighbor.py`): B's one-step predictive P(win) at every history tick (2314 machines-with->=40 ticks
+  of train+val, 1157 analysed), residual u = win - p; z for other machine j at lag k, vs a null with j from another episode.
+  Machine-specific coupling (fixed partner, own sign): **absent**: pair z^2 by lag 0.94-1.01 (no excess), per-machine max|z| over 56 (j,k)
+  quantiles 2.45/3.06/3.70 vs null 2.20/2.95/3.75. Common-sign effect: others' win at lag k raises own win, all lags +0.06..+0.08 (shared
+  drift), **lag 3 spike +0.22** (episode count z +0.56 vs +0.09..+0.17 at other lags; null ~0).
+  Value (`src/nbr_val.py`, validation true probs, B final logit + g * mean_j(win_j(c-3) - rate_j)): g .25 58.208, **g .5 58.216**, g .75 58.201,
+  g 1 58.162 (B 58.177; same-type only 58.173, other-type 58.202, big payouts 58.189; lags 1,2,4,5 all <= 58.13). => +0.04 pts at best.
+  Built into B as a per-kit learnable term (`nbk`, `nbg`; k 1..8, g grid on dev, kept only if confirm also improves).
+  Main: dev picks the same lag 3 / g .5 (dev 367.50 -> 367.27) but confirm worsens (357.44 -> 357.90) -> not kept. Clear small-effect result.
+- Rule vs type / signal / episode on main (`src/typecheck.py`, MAP among the 3 pairs): uniform over types and signals; within-episode same-rule
+  rate 0.336 (1/3 = independent) -> no type- or episode-conditional prior to exploit.
+- **Oracle prior gap** (`src/oracle_b.py`: true pair set uniform + true size-lag rule, rest fitted; validation points /40):
+| kit | truth | B (EM-fitted) | oracle prior | short_history ratio B / oracle |
+|---|---|---|---|---|
+| S1 | (3,6),(1,8),(2,4), size lag uniform 1..8 | 37.408 | 37.409 | .1065 / .1073 |
+| S1b | (1,3),(2,6),(5,8) (partial overlap with main), size lag = first lag | 37.895 | 37.902 | .0610 / .0603 |
+| S1c | (2,7),(4,5),(1,6),(3,8), size lag = second lag | 37.743 | 37.752 | .0867 / .0871 |
+  EM recovers the new pairs exactly (S1b 2,6 .357 / 1,3 .316 / 5,8 .315; S1c .23-.26 each; rest < .001). Discovery is at oracle level;
+  short history is limited by identifying each machine's own pair/sign/offset from ~64 ticks, not by the population prior.
+  Main-kit prior as an extra prior: unnecessary (new kit alone is at oracle).

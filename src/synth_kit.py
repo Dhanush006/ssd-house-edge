@@ -78,6 +78,10 @@ def machine_spec(rng, sc, m):
         while l2 == l1: l2 = tuple(sorted(rng.sample(range(1, 9), 2)))
         sp.update(kind="xor", lags=l1, lags2=l2, swfrac=rng.uniform(0.6, 0.85), k=rng.randint(1, 8))
         return sp
+    if sc == "S1b":  # partial overlap with main pairs, size lag tied to the first lag (as on main)
+        a, b = rng.choice(((1, 3), (2, 6), (5, 8))); sp.update(kind="xor", lags=(a, b), k=a); return sp
+    if sc == "S1c":  # four new pairs, size lag tied to the second lag
+        a, b = rng.choice(((2, 7), (4, 5), (1, 6), (3, 8))); sp.update(kind="xor", lags=(a, b), k=b); return sp
     if sc == "S1":
         a, b = rng.choice(((3, 6), (1, 8), (2, 4))); sp.update(kind="xor", lags=(a, b), k=rng.randint(1, 8))
     elif sc == "S2":
