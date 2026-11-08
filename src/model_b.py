@@ -345,6 +345,21 @@ def episode_offset(recs, c, P):
     return e
 
 
+def nb_feat(ctx, c, k):
+    """Episode neighbor term: mean over the other machines of (win at c-k) - (their win rate before c-k)."""
+    hs, mi = ctx; acc = []
+    for n, h in enumerate(hs):
+        if n == mi: continue
+        v = h.get(c - k)
+        if v is None: continue
+        nw = nt = 0
+        for t, u in h.items():
+            if t < c - k:
+                nt += 1; nw += u > 0
+        acc.append((1.0 if v > 0 else 0.0) - nw / max(1, nt))
+    return math.fsum(acc) / len(acc) if acc else 0.0
+
+
 def finalize(p, e, P):
     if e:
         pw = 1 - p[0]; pw2 = sig(logit(pw) + e)
@@ -373,6 +388,8 @@ def _work(args):
         if P.get("eL", 0):
             others = [r for r in by_ep[ep] if r is not rec]
             e = episode_offset(others, c, P)
+        if P.get("nbg"):
+            e += P["nbg"] * nb_feat(ctxs[qid], c, P["nbk"])
         out.append((qid, finalize(p, e, P)) if not P.get("gatefeat") else (qid, (finalize(p, e, P), gfs[qid])))
     return out
 

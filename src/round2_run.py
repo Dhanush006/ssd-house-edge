@@ -260,6 +260,14 @@ def evaluate(kit, tag, force, workers, fast=False, tune=True, ablations=False):
                 if name == "B": raise
                 log(f"WARN dev pred {name} failed (dropped):", repr(e)[:300])
     dev, dmeta = J["preds"], {k: tuple(v) for k, v in J["meta"].items()}
+    if not os.environ.get("R2_NONB"):
+        try:
+            if nb_tune(out, pub, dev, dmeta, js):
+                dp.write_text(json.dumps(J))
+                predict_splits(out, pub, "B", True, workers); vp["B"] = val_line(out, "B", Sc)
+                (out / "B" / "entry.zip").unlink(missing_ok=True)
+        except Exception as e:
+            log("WARN neighbor tune failed (ignored):", repr(e)[:300])
     if tune and not fast:
         try:
             tune_b(out, pub, dev, dmeta, workers, force, js)
@@ -346,6 +354,30 @@ def evaluate(kit, tag, force, workers, fast=False, tune=True, ablations=False):
     else:
         publish(out / pick, "FINAL", pick, pub)
     log(f"DONE {time.time() - T0:.0f}s. FINAL = {pick} -> " + (str(DESK / "FINAL") if OPT["desk"] else str(out / pick) + " (desktop copy disabled)"))
+
+
+def nb_tune(out, pub, dev, dmeta, js):
+    """Episode neighbor term for B (others' win surprise at lag k, coefficient g): (k, g) chosen on the dev split from
+    B's dev predictions (post-hoc logit shift), kept only if the confirm split also improves. Returns True if B changed."""
+    pf = out / "B" / "params.json"; P = json.loads(pf.read_text())
+    if "nb_done" in P:
+        return False
+    M = mod("B"); items, _ = dev_items(pub, js); ctx = M.episode_ctx(items)
+    F = {k: {it[0]: M.nb_feat(ctx[it[0]], it[3], k) for it in items} for k in range(1, 9)}
+    adj = lambda k, g: {q: M.finalize(p, g * F[k][q], P) for q, p in dev["B"].items()}
+    b_dev, _ = dev_brier(dev["B"], dmeta, "dev"); b_conf, _ = dev_brier(dev["B"], dmeta, "confirm"); best = None
+    for k in range(1, 9):
+        for g in (-0.5, -0.25, 0.25, 0.5, 0.75, 1.0):
+            m, _ = dev_brier(adj(k, g), dmeta, "dev")
+            if best is None or m < best[0] - 1e-12: best = (m, k, g)
+    m, k, g = best; pr = adj(k, g); mc, _ = dev_brier(pr, dmeta, "confirm")
+    ok = m < b_dev - 2e-5 and mc < b_conf
+    log(f"neighbor term: best lag {k} g={g} dev={1e3 * m:.2f} confirm={1e3 * mc:.2f} vs B dev={1e3 * b_dev:.2f} confirm={1e3 * b_conf:.2f} -> {'KEEP' if ok else 'no'}")
+    P["nb_done"] = 1
+    if ok:
+        P["nbk"] = k; P["nbg"] = g; dev["B"].clear(); dev["B"].update(pr)
+    pf.write_text(json.dumps(P, indent=1, sort_keys=True) + "\n")
+    return ok
 
 
 def tune_b(out, pub, dev, dmeta, workers, force, js, ndraw=int(os.environ.get("R2_NDRAW", "8"))):
