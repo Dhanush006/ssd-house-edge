@@ -182,4 +182,4 @@ Kit released ~1 h before the deadline -> everything pre-built; one command (`ROU
   Main-kit prior as an extra prior: unnecessary (new kit alone is at oracle).
 - Short/long-history split blend weights (`src/shortblend.py`, dev-chosen, confirm Brier x1e3): main B 357.44 vs split 358.47 (w_short .6);
   S1 374.70 vs 374.94; S2 386.30 vs 387.06; S3 372.57 vs 371.78 (global blend 371.80); S4 equal. -> no short-history gain from mixing; dropped.
-  Gate summary: never eligible (dev gain, confirm loss on main, S1, X1-X3); remains in the runner as a confirm-guarded candidate (R2_NOGATE=1 skips it).
+  Gate summary: never eligible (dev gain, confirm loss on main, S1, X1-X3); now opt-in (`--gate`), confirm-guarded.

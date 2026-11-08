@@ -1,6 +1,6 @@
 """Round-2 one-command runner (staged, restartable; timestamped summary lines only).
 
-  python src/round2_run.py <kit_dir> [--tag NAME] [--fast] [--force] [--workers 6] [--notune] [--ablations] [--nodesk]
+  python src/round2_run.py <kit_dir> [--tag NAME] [--fast] [--force] [--workers 6] [--notune] [--ablations] [--nodesk] [--gate]
     stage 0  schema report; pooled fallback P fitted + packaged + verified       -> Desktop SAFE   (~1 min)
     stage 1  B fitted (C, C_dev fit in parallel); B predicted, packaged, verified -> Desktop SAFE   (~5 min)
     stage 2  dev split (train pseudo-queries, observed outcomes): B, C, (A), retune Bt (not with --fast),
@@ -298,7 +298,7 @@ def evaluate(kit, tag, force, workers, fast=False, tune=True, ablations=False):
         dev["blend"] = mix(dev, ws); vp["blend"] = val_line(out, "blend", Sc)
         log(f"blend (dev-selected) {ws}")
     # per-query gate (B vs C weight from B's confidence), fitted on dev only
-    if hasC and not os.environ.get("R2_NOGATE"):
+    if hasC and OPT.get("gate"):  # opt-in (--gate): never beat B/blend on confirm in rehearsals
         try:
             g = gate_stage(out, pub, dev, dmeta, workers, force, js)
             if g is not None:
@@ -583,7 +583,7 @@ def main():
     a = sys.argv[1:]
     kit = a[0]; tag = a[a.index("--tag") + 1] if "--tag" in a else Path(kit).resolve().name
     workers = int(a[a.index("--workers") + 1]) if "--workers" in a else 6
-    OPT["desk"] = "--nodesk" not in a
+    OPT["desk"] = "--nodesk" not in a; OPT["gate"] = "--gate" in a
     if "--package" in a:
         pub, _ = paths(kit); setup_quiet(pub)
         ok = package(kit, tag, a[a.index("--package") + 1], desk=a[a.index("--desk") + 1] if "--desk" in a else None)
