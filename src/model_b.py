@@ -130,13 +130,17 @@ def common_ticks(s, ticks, lmax):
     return [t for t in ticks if all((t - j) in s for j in range(1, lmax + 1))]
 
 
-def screen_ll(s, ticks_c, h, win, ctx=None):
-    """Windowed beta-binomial evidence of win/loss given x under h (separate rates per x per window)."""
+def screen_ll(s, ticks_c, h, win, ctx=None, evhl=0):
+    """Windowed beta-binomial evidence of win/loss given x under h (separate rates per x per window).
+    evhl > 0: older windows down-weighted by 0.5 ** (age_in_ticks / evhl) (rules that change over time)."""
     cnt = defaultdict(lambda: [0, 0])
     for t in ticks_c:
         x = xval(s, t, h, ctx)
         cnt[(t // win, x)][0 if s[t] > 0 else 1] += 1
-    return math.fsum(lbb(w, l) for w, l in cnt.values())
+    if not evhl or not cnt:
+        return math.fsum(lbb(w, l) for w, l in cnt.values())
+    wm = max(k[0] for k in cnt)
+    return math.fsum(0.5 ** ((wm - k[0]) * win / evhl) * lbb(w, l) for k, (w, l) in sorted(cnt.items(), key=lambda r: (r[0][0], str(r[0][1]))))
 
 
 # ---------------- size rule ----------------
@@ -262,7 +266,7 @@ class WinFilter:
         for h in cand:
             kp = self.kprior.get(h) or self.kprior[("fallback",)]
             sp = SizePost(s, sz_hyps, sz_ll, kp, nep)
-            sc = math.log(self.hprior[h]) + P["evs"] * screen_ll(s, tc, h, P["swin"], ctx) + sp.logev
+            sc = math.log(self.hprior[h]) + P["evs"] * screen_ll(s, tc, h, P["swin"], ctx, P.get("evhl", 0)) + sp.logev
             out.append((sc, h, sp))
         out.sort(key=lambda r: (-r[0], hkey(r[1])))
         best = out[0][0]
@@ -283,7 +287,7 @@ class WinFilter:
         lev = []; preds = []; recs = []; hs_ = []
         L = P.get("eL", 0)
         for sc, h, sp in kept:
-            post = list(self.prior); last = None; le = 0.0; rec = {}
+            post = list(self.prior); last = None; le = 0.0; rec = {}; lz = []
             for t in ticks:
                 x = xval(s, t, h, ctx)
                 if x is None:
@@ -304,8 +308,11 @@ class WinFilter:
                 post = [u * w for u, w in zip(post, lik)]
                 z = math.fsum(post)
                 if t in tcs or not P.get("evcommon", True):
-                    le += math.log(z)
+                    if P.get("evhl"): lz.append((t, math.log(z)))
+                    else: le += math.log(z)
                 post = [u / z for u in post]
+            if lz:
+                le = math.fsum(0.5 ** ((c - t) / P["evhl"]) * v for t, v in lz)
             x = xval(s, c, h, ctx)
             if x is None and h[0] == "cr": x = 0.0
             if last is None or x is None:
