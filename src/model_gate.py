@@ -74,7 +74,7 @@ def predict_split(d, P, workers=1):
     return combine(PB, PC, F, P["theta"])
 
 
-def fit_gate(DB, DC, F, meta, lam=1e-3):
+def fit_gate(DB, DC, F, meta, lam=1e-5):
     """theta minimizing the mean Brier of the mixture on the 'dev' split items; reports dev/confirm vs B, C."""
     import numpy as np
     from scipy.optimize import minimize

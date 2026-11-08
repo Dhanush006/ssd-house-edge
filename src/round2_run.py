@@ -368,7 +368,7 @@ def gate_stage(out, pub, dev, dmeta, workers, force, js):
         return None
     G = mod("gate")
     gd = out / "gate"; gd.mkdir(exist_ok=True)
-    fp = out / "gate_feats.json"
+    fp = out / f"gate_feats_{len(js)}.json"
     if force or not fp.exists():
         items, _ = dev_items(pub, js)
         Pb = json.loads((out / "B" / "params.json").read_text())
@@ -383,7 +383,7 @@ def gate_stage(out, pub, dev, dmeta, workers, force, js):
     # validation / test predictions from the already computed B and C rows + B features
     for split, fn in (("validation", "validation_predictions.csv"), ("test", "submission.csv")):
         if not (pub / split / "queries.csv").exists() or not (out / "C" / fn).exists(): continue
-        if force or not (gd / fn).exists():
+        if True:  # theta may change between runs: always recompute
             Pb = json.loads((out / "B" / "params.json").read_text())
             Fs = G.b_feats(read_items("B", pub / split), Pb, workers)
             S.write_csv(gd / fn, G.combine(S.load_csv(out / "B" / fn), S.load_csv(out / "C" / fn), Fs, th))
