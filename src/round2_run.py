@@ -345,7 +345,7 @@ def evaluate(kit, tag, force, workers, fast=False, tune=True, ablations=False):
         package(kit, tag, pick, desk="FINAL")
     else:
         publish(out / pick, "FINAL", pick, pub)
-    log(f"DONE {time.time() - T0:.0f}s. FINAL = {pick} -> {DESK / 'FINAL'}")
+    log(f"DONE {time.time() - T0:.0f}s. FINAL = {pick} -> " + (str(DESK / "FINAL") if OPT["desk"] else str(out / pick) + " (desktop copy disabled)"))
 
 
 def tune_b(out, pub, dev, dmeta, workers, force, js, ndraw=int(os.environ.get("R2_NDRAW", "8"))):
