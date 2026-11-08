@@ -49,7 +49,7 @@ Run the full mode (reuses the fitted models; adds the filter-rate retune Bt, mod
 Upload from `FINAL/` again only if it finishes with `DONE` at least 5 minutes before the deadline. If not, keep the fast upload.
 
 Information lines in stage 2 (no action needed; each change is kept only if the dev AND the confirm split improve):
-- `neighbor term: best lag k g=... -> KEEP|no`: adds the other machines' win surprise at lag k to model B.
+- `neighbor term: ...` appears only with the optional `--nb` flag (off by default: small effect, false positives in tests).
 - `evidence half-life H: ... -> KEEP|no`: model B forgets old rule evidence (helps when a machine's rule changes inside its history).
 - `blend (dev-selected) {...}`: B/C weights chosen on the dev split.
 - If B changes in stage 2, B is re-predicted and re-packaged before FINAL (the SAFE copy is the older B; FINAL is the one to upload).
@@ -92,6 +92,8 @@ Each `--package` run prints `byte-identical=True`, `own validator: VALID`, and t
 ## 6. Final checklist before the last upload
 - [ ] `INFO.txt` rows = number of test queries (`schema test: N queries` line).
 - [ ] Log line `own validator: VALID` for the uploaded model, and `kit checker (test): VALID FORMAT` (real kit).
+      Manual check: `cd <folder with check_submission.py> && ../path/to/house-edge/.venv/bin/python check_submission.py ~/Desktop/SSD-HouseEdge-R2/FINAL/submission.csv --data KIT`
+- [ ] `INFO.txt` kit = the adaptation folder (never upload from `_previous/`).
 - [ ] `byte-identical=True` (fresh-folder Python 3.13 run vs. 1-worker rerun).
 - [ ] `zip ... root README/reproduce ok=True`; ZIP < 100 MB, CSV < 10 MB.
 - [ ] Test runtime on the `package` line well under 30 min.
