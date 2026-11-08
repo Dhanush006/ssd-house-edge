@@ -2,7 +2,14 @@
 
 We forecast the next payout of simulated slot machines. For each machine, the model gives five probabilities: a payout of 0×, 1×, 2×, 5× or 20× the wager.
 
-**Result:** 58.21 of 60 validation points. The starter baseline scores 30.83. The model takes 54 seconds on one CPU core and uses only the Python standard library.
+**Result (validation points):**
+
+| Round | Our entry | Starter |
+|---|---|---|
+| Main | **58.21 / 60** | 30.83 |
+| Round 2 (adaptation) | **38.87 / 40** | 20.44 |
+
+Both entries use only the Python standard library, and each runs in under 2 minutes. Round 2 is in [Section 7](#7-round-2-adaptation).
 
 The rest of this file explains the challenge, then our approach step by step, then the model, the evidence, and what did not work.
 
@@ -257,19 +264,57 @@ python src/make_entry.py runs/06-lowjump src/puremodel.py runs/06-lowjump/params
 
 ---
 
-## 7. Limitations and the plan for round 2
+## 7. Round 2 (adaptation)
 
-- **The structure is hard-coded.** The lag pairs, the size lags and the size tables are fixed constants. If the hidden test data uses different rules, these constants will not transfer. The main-round kit gives no sign of this.
-- **The size tables come from validation targets.** This uses released data, which the rules allow.
-- **Short histories stay weak.** The model needs more spins to identify each machine's rule.
+Round 2 changed "some of the patterns" and gave 90 minutes to adapt. The main-round model hard-codes its rules, so we built a general model before the data came out.
 
-Round 2 changes some of the timing patterns on purpose. Our plan:
+### 7.1 Model B: learn the rules from the data
 
-1. Run the current model unchanged on the new validation data, to get a baseline.
-2. Re-run the structure probes in `src/explore*.py` on the new training data: the lag pairs, the size lag, the two size tables and the link between them.
-3. Move these constants into `params.json` and refit them. If the pair set is unclear, allow all 28 possible lag pairs with a prior.
-4. Retune the filter settings and check them on the training Brier score.
-5. Package and check the entry as before.
+Model B keeps the same Bayesian filter as the main model but assumes no rules. For each machine, it weighs **268 candidate win rules**:
+- lag pairs combined by XOR, AND, OR or AND-NOT;
+- single lags and win counts;
+- 3-lag parity;
+- lags of other machines in the episode;
+- "no structure".
+
+It also weighs every candidate size lag and polarity. Its priors over these hypotheses, and the number of size tables, are fitted by EM on the round's training and validation data. The code is in `src/model_b.py` and `src/fit_b.py`.
+
+### 7.2 Rehearsal before the release
+
+We built 17 synthetic round-2 kits with known true odds (`src/synth_kit.py`). They cover new lag pairs, other rule families, rules that switch mid-history, no structure, extra size states, and file-format changes. One command (`src/round2_run.py`) runs the whole pipeline on any kit, in this order:
+
+1. It packages a pooled fallback model (P) as a safe entry within seconds.
+2. It fits B and packages it.
+3. It compares B, a tree model (C) and their blend on a dev/confirm split of the training data, and picks the final entry.
+
+Each entry is rerun from a fresh folder and must reproduce byte for byte. On the three kits with new lag pairs, B scored within 0.01 points of a version that was given the true rules.
+
+### 7.3 What happened on release day
+
+| Time after release | Event |
+|---|---|
+| 3 s | Safe entry (P) ready |
+| 92 s | B ready; B became the safe entry |
+| 172 s | Final pick: B, with no warning flags |
+
+What B found: the lag pairs changed from (1,3), (2,5), (4,7) to **(3,8), (1,4), (2,6)**, each used by about a third of the machines. The size lag is still the first lag of the pair, and the size tables are unchanged.
+
+| Model | Round-2 validation points (out of 40) |
+|---|---|
+| **B (submitted)** | **38.87** |
+| B with retuned filter rates | 38.88 (within noise; not used) |
+| C, gradient-boosted trees | 37.27 |
+| Pooled fallback P | 20.45 |
+| Starter | 20.44 |
+| Main-round model, unchanged | 20.09 |
+
+The main-round model fell to starter level, because its fixed lag pairs no longer applied. B's error ratio in round 2 (0.029) was as low as in the main round (0.031).
+
+### 7.4 Limitations
+
+- **Short histories stay the weakest condition** in both rounds. With about 64 spins, the model cannot always tell which rule a machine follows.
+- **B covers a fixed family of rules.** A change outside the 268 hypotheses would fall back to the tree model or the blend, which are weaker.
+- **Ideas that failed a held-out check were left out:** neighbor-machine effects, per-machine B/C mixing, and a learned B/C gate. Details are in `experiments.md`.
 
 ---
 
@@ -294,6 +339,11 @@ python check_submission.py ../runs/06-lowjump/submission.csv
 | `src/make_entry.py` | Builds an entry folder and zip |
 | `runs/05-eps/entry/` | The first upload (58.16), kept as the fallback |
 | `runs/06-lowjump/entry/` | The final main-round entry (58.21) |
+| `runs/R2-R2/B/entry/` | The submitted round-2 entry, model B (38.87 / 40) |
+| `src/model_b.py`, `src/fit_b.py` | Model B and its EM fit |
+| `src/round2_run.py` | The one-command round-2 pipeline |
+| `src/synth_kit.py`, `src/suite.py` | Synthetic round-2 kits and the rehearsal suite |
+| `ROUND2_RUNBOOK.md` | The release-day steps |
 
 Good first steps for a review:
 

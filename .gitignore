@@ -18,3 +18,8 @@ C?AUDE.md
 _synth/
 kit2/
 _r2kit*.log
+!runs/R2-R2/
+runs/R2-R2/*
+!runs/R2-R2/B/
+runs/R2-R2/B/*
+!runs/R2-R2/B/entry/
