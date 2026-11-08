@@ -76,6 +76,8 @@ def setup_schema(pub):
         sg = sorted(set(q["signal"] for q in qs))
         log(f"schema {sp}: {len(qs)} queries, {len(ep)} episodes, machines/episode {min(ep.values())}-{max(ep.values())}, "
             f"cutoff {min(cut)}-{max(cut)}, history len {min(nh)}-{max(nh)} (mean {sum(nh) / len(nh):.0f}), types {types[sp]}, signal {sg[:6]}")
+    if str(md.get("round", "")).lower() == "main":
+        log("FLAG KIT_IS_MAIN_ROUND: metadata says round=main. For round 2 pass the adaptation public/ folder!")
     unk = sorted(set(types["test"]) - fitted)
     if unk: log(f"FLAG NEW_TEST_TYPES {unk}: these use the pooled fallback (type '_pool') in B, C (all-zero type) and P")
     if not STD: log("schema differs from main round: model A disabled (hard-coded main schema)")
